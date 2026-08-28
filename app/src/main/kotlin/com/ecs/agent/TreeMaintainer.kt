@@ -1,6 +1,7 @@
 package com.ecs.agent
 
 import com.ecs.core.model.ErrorRecord
+import com.ecs.core.prompt.PromptSlot
 import com.ecs.core.tree.Embedder
 import com.ecs.core.tree.KaodianTree
 import com.ecs.core.tree.TreeNode
@@ -12,7 +13,10 @@ import kotlinx.serialization.json.jsonPrimitive
  * F7.3 树维护 + F6 提议队列。新建节点只在这里发生，不在标注流程中。
  * 全部是「Agent 提议 + 人一键确认」，除向上合并外不自动改结构。
  */
-class TreeMaintainer(private val client: AgentClient) {
+class TreeMaintainer(
+    private val client: AgentClient,
+    private val prompts: PromptProvider = PromptProvider.DEFAULT,
+) {
 
     sealed interface Proposal {
         val summary: String
@@ -89,7 +93,7 @@ class TreeMaintainer(private val client: AgentClient) {
             appendLine()
             appendLine("""输出 JSON：[{"from":"被合并的路径","into":"保留的路径","reason":"一句话"}]""")
         }
-        val arr = client.arr(client.complete(SYSTEM, user, maxTokens = 2000))
+        val arr = client.arr(client.complete(prompts.text(PromptSlot.TREE_MAINTAIN), user, maxTokens = 2000))
         return arr.mapNotNull {
             val o = it.jsonObject
             val from = o["from"]?.jsonPrimitive?.content ?: return@mapNotNull null
@@ -110,7 +114,7 @@ class TreeMaintainer(private val client: AgentClient) {
             appendLine("""输出 JSON：{"reason":"一句话","children":[{"path":"$path/xxx","form_rule":"..."}]}""")
             appendLine("children 至少 2 个，路径必须以「$path/」开头，深度不超过 4 层。")
         }
-        val o = client.obj(client.complete(SYSTEM, user, maxTokens = 2000))
+        val o = client.obj(client.complete(prompts.text(PromptSlot.TREE_MAINTAIN), user, maxTokens = 2000))
         val children = o["children"]?.jsonArray.orEmpty().mapNotNull {
             val c = it.jsonObject
             val p = c["path"]?.jsonPrimitive?.content?.trim() ?: return@mapNotNull null
@@ -137,7 +141,7 @@ class TreeMaintainer(private val client: AgentClient) {
             appendLine("要么归入其中一个，要么新建一个末端节点（深度 3-4 层，顶层只能是 词法/句法/语法）。")
             appendLine("""输出 JSON：{"action":"adopt"|"create","path":"...","form_rule":"新建时必填"}""")
         }
-        val o = client.obj(client.complete(SYSTEM, user, maxTokens = 800))
+        val o = client.obj(client.complete(prompts.text(PromptSlot.TREE_MAINTAIN), user, maxTokens = 800))
         val path = o["path"]?.jsonPrimitive?.content?.trim() ?: return null
         return if (o["action"]?.jsonPrimitive?.content == "create") {
             val rule = o["form_rule"]?.jsonPrimitive?.content?.trim().orEmpty()
@@ -172,10 +176,5 @@ class TreeMaintainer(private val client: AgentClient) {
 
     companion object {
         const val ADOPT_THRESHOLD = 10
-        private val SYSTEM = """
-            你在维护一棵专升本英语考点树。顶层三分固定：词法 / 句法 / 语法。
-            末端深度 3-4 层，必须细到能对应一个可执行动作，且必须带 form_rule（一句话，可直接背）。
-            只输出 JSON，不要解释。
-        """.trimIndent()
     }
 }

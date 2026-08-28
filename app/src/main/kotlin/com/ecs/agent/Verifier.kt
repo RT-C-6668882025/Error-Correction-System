@@ -2,6 +2,7 @@ package com.ecs.agent
 
 import com.ecs.core.model.ErrorRecord
 import com.ecs.core.model.Verified
+import com.ecs.core.prompt.PromptSlot
 import com.ecs.core.tree.Embedder
 import com.ecs.core.tree.KaodianTree
 import com.ecs.core.tree.truncate
@@ -14,7 +15,10 @@ import kotlin.random.Random
  *
  * 第二次调用与 [Annotator] 用不同提示词，且不给第一次的结果。
  */
-class Verifier(private val client: AgentClient) {
+class Verifier(
+    private val client: AgentClient,
+    private val prompts: PromptProvider = PromptProvider.DEFAULT,
+) {
 
     /** 抽检比例 5%，不足一条时至少抽一条。 */
     fun sample(records: List<ErrorRecord>, rate: Double = 0.05, random: Random = Random.Default): List<ErrorRecord> {
@@ -23,12 +27,6 @@ class Verifier(private val client: AgentClient) {
         val n = Math.max(1, Math.round(pool.size * rate).toInt())
         return pool.shuffled(random).take(n)
     }
-
-    private val system = """
-        判断下面这个英语填空的空考的是什么，从给定路径里挑一条最贴切的。
-        只输出 JSON：{"path":"..."}；都不贴切时输出 {"path":"unmatched"}。
-        不要解释。
-    """.trimIndent()
 
     /** 比对截断到 depth=3 的路径。 */
     suspend fun verify(
@@ -49,7 +47,12 @@ class Verifier(private val client: AgentClient) {
             appendLine("可选路径：")
             paths.forEach { appendLine("- $it") }
         }
-        val raw = client.complete(system = system, user = user, maxTokens = 256, temperature = 0.0)
+        val raw = client.complete(
+            system = prompts.text(PromptSlot.VERIFY),
+            user = user,
+            maxTokens = 256,
+            temperature = 0.0,
+        )
         val second = client.obj(raw)["path"]?.jsonPrimitive?.content?.trim().orEmpty()
         if (second.isBlank() || second == "unmatched") return Verified.CONFLICT
         return if (truncate(second, depth) == truncate(first, depth)) Verified.CONSISTENT else Verified.CONFLICT

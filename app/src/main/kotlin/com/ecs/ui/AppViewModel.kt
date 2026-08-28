@@ -12,14 +12,18 @@ import com.ecs.agent.TreeMaintainer
 import com.ecs.core.agg.Aggregator
 import com.ecs.core.export.CsvImporter
 import com.ecs.core.export.Exporter
+import com.ecs.core.model.ApiEndpoint
+import com.ecs.core.model.BuiltInEndpoints
 import com.ecs.core.model.ErrorRecord
 import com.ecs.core.model.ModelCatalog
 import com.ecs.core.model.RecordStatus
 import com.ecs.core.model.Section
 import com.ecs.core.model.Verified
+import com.ecs.core.prompt.PromptSlot
 import com.ecs.core.report.ReportBuilder
 import com.ecs.core.tree.KaodianTree
 import com.ecs.data.repo.RecordRepository
+import com.ecs.data.update.UpdateChecker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -48,11 +52,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
-    private val _anthropicKey = MutableStateFlow("")
-    val anthropicKey: StateFlow<String> = _anthropicKey.asStateFlow()
-
-    private val _zhipuKey = MutableStateFlow("")
-    val zhipuKey: StateFlow<String> = _zhipuKey.asStateFlow()
+    private val _endpoints = MutableStateFlow(BuiltInEndpoints.ALL)
+    val endpoints: StateFlow<List<ApiEndpoint>> = _endpoints.asStateFlow()
 
     private val _textModel = MutableStateFlow(ModelCatalog.DEFAULT_TEXT)
     val textModel: StateFlow<String> = _textModel.asStateFlow()
@@ -60,38 +61,46 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _visionModel = MutableStateFlow(ModelCatalog.DEFAULT_VISION)
     val visionModel: StateFlow<String> = _visionModel.asStateFlow()
 
+    private val _textEndpoint = MutableStateFlow(ModelCatalog.DEFAULT_TEXT_ENDPOINT)
+    val textEndpoint: StateFlow<String> = _textEndpoint.asStateFlow()
+
+    private val _visionEndpoint = MutableStateFlow(ModelCatalog.DEFAULT_VISION_ENDPOINT)
+    val visionEndpoint: StateFlow<String> = _visionEndpoint.asStateFlow()
+
     private val _microDepth = MutableStateFlow(3)
     val microDepth: StateFlow<Int> = _microDepth.asStateFlow()
 
     private val _macroDepth = MutableStateFlow(2)
     val macroDepth: StateFlow<Int> = _macroDepth.asStateFlow()
 
-    /** 识别结果暂存，供确认页使用。 */
-    private val _scanned = MutableStateFlow<List<PaperScanner.Question>>(emptyList())
-    val scanned: StateFlow<List<PaperScanner.Question>> = _scanned.asStateFlow()
+    private val _promptOverrides = MutableStateFlow<Map<PromptSlot, String>>(emptyMap())
+    val promptOverrides: StateFlow<Map<PromptSlot, String>> = _promptOverrides.asStateFlow()
 
-    private val _proposals = MutableStateFlow<List<TreeMaintainer.Proposal>>(emptyList())
-    val proposals: StateFlow<List<TreeMaintainer.Proposal>> = _proposals.asStateFlow()
+    private val _updateResult = MutableStateFlow<UpdateChecker.Result?>(null)
+    val updateResult: StateFlow<UpdateChecker.Result?> = _updateResult.asStateFlow()
 
-    private val _microNarrative = MutableStateFlow<Map<String, ReportBuilder.MicroNarrative>>(emptyMap())
-    val microNarrative: StateFlow<Map<String, ReportBuilder.MicroNarrative>> = _microNarrative.asStateFlow()
-
-    private val _macroNarrative = MutableStateFlow(ReportBuilder.MacroNarrative())
-    val macroNarrative: StateFlow<ReportBuilder.MacroNarrative> = _macroNarrative.asStateFlow()
+    val installedVersion: String get() = container.updateChecker.installedVersion()
 
     init {
         viewModelScope.launch {
             container.treeStore.load()
-            _anthropicKey.value = runCatching { container.settings.anthropicKey.first() }.getOrDefault("")
-            _zhipuKey.value = runCatching { container.settings.zhipuKey.first() }.getOrDefault("")
-            _textModel.value = runCatching { container.settings.textModel.first() }
-                .getOrDefault(ModelCatalog.DEFAULT_TEXT)
-            _visionModel.value = runCatching { container.settings.visionModel.first() }
-                .getOrDefault(ModelCatalog.DEFAULT_VISION)
-            _microDepth.value = runCatching { container.settings.microDepth.first() }.getOrDefault(3)
-            _macroDepth.value = runCatching { container.settings.macroDepth.first() }.getOrDefault(2)
+            refreshSettings()
+            _promptOverrides.value = runCatching { container.promptStore.overrides() }.getOrDefault(emptyMap())
             repo.sweepDormancy()
         }
+    }
+
+    private suspend fun refreshSettings() {
+        val s = container.settings
+        _endpoints.value = runCatching { s.endpoints.first() }.getOrDefault(BuiltInEndpoints.ALL)
+        _textModel.value = runCatching { s.textModel.first() }.getOrDefault(ModelCatalog.DEFAULT_TEXT)
+        _visionModel.value = runCatching { s.visionModel.first() }.getOrDefault(ModelCatalog.DEFAULT_VISION)
+        _textEndpoint.value =
+            runCatching { s.textEndpoint.first() }.getOrDefault(ModelCatalog.DEFAULT_TEXT_ENDPOINT)
+        _visionEndpoint.value =
+            runCatching { s.visionEndpoint.first() }.getOrDefault(ModelCatalog.DEFAULT_VISION_ENDPOINT)
+        _microDepth.value = runCatching { s.microDepth.first() }.getOrDefault(3)
+        _macroDepth.value = runCatching { s.macroDepth.first() }.getOrDefault(2)
     }
 
     fun dismissMessage() { _message.value = null }
@@ -112,14 +121,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- 设置 ----------
 
-    fun setAnthropicKey(v: String) {
-        _anthropicKey.value = v
-        viewModelScope.launch { container.settings.setAnthropicKey(v) }
+    // ---------- 端点与模型 ----------
+
+    fun saveEndpoint(endpoint: ApiEndpoint) = run("保存端点…") {
+        container.settings.upsertEndpoint(endpoint)
+        refreshSettings()
+        _message.value = "已保存 ${endpoint.name}　请求地址 ${endpoint.url}"
     }
 
-    fun setZhipuKey(v: String) {
-        _zhipuKey.value = v
-        viewModelScope.launch { container.settings.setZhipuKey(v) }
+    fun deleteEndpoint(id: String) = run("删除端点…") {
+        container.settings.deleteEndpoint(id)
+        refreshSettings()
+    }
+
+    /** 中转站地址、协议、Key 三者错任一个，报错都长得一样，所以给一个能自查的按钮。 */
+    fun testEndpoint(endpoint: ApiEndpoint, modelId: String) = run("测试连接…") {
+        _message.value = container.client.ping(endpoint, modelId)
     }
 
     fun setTextModel(v: String) {
@@ -132,13 +149,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { container.settings.setVisionModel(v) }
     }
 
-    /** 当前选中的模型缺不缺 Key——设置页用它给出准确提示。 */
-    fun missingKeyFor(modelId: String, vision: Boolean): Boolean {
-        val spec = ModelCatalog.resolve(modelId, vision = vision)
-        return when (spec.provider) {
-            ModelCatalog.Provider.ANTHROPIC -> _anthropicKey.value.isBlank()
-            ModelCatalog.Provider.ZHIPU -> _zhipuKey.value.isBlank()
-        }
+    fun setTextEndpoint(v: String) {
+        _textEndpoint.value = v
+        viewModelScope.launch { container.settings.setTextEndpoint(v) }
+    }
+
+    fun setVisionEndpoint(v: String) {
+        _visionEndpoint.value = v
+        viewModelScope.launch { container.settings.setVisionEndpoint(v) }
     }
 
     fun setMicroDepth(v: Int) {
@@ -150,6 +168,37 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _macroDepth.value = v
         viewModelScope.launch { container.settings.setMacroDepth(v) }
     }
+
+    fun endpointOf(id: String): ApiEndpoint? = _endpoints.value.firstOrNull { it.id == id }
+
+    /** 选中的端点缺 Key 或缺地址——设置页据此给出准确提示。 */
+    fun endpointReady(id: String): Boolean = endpointOf(id)?.configured == true
+
+    // ---------- 提示词 ----------
+
+    fun savePrompt(slot: PromptSlot, body: String) = run("保存提示词…") {
+        container.promptStore.save(slot, body)
+        _promptOverrides.value = container.promptStore.overrides()
+    }
+
+    fun resetPrompt(slot: PromptSlot) = run("还原默认…") {
+        container.promptStore.reset(slot)
+        _promptOverrides.value = container.promptStore.overrides()
+    }
+
+    fun resetAllPrompts() = run("全部还原…") {
+        container.promptStore.resetAll()
+        _promptOverrides.value = container.promptStore.overrides()
+        _message.value = "所有提示词已还原为默认"
+    }
+
+    // ---------- 检查更新 ----------
+
+    fun checkUpdate() = run("检查更新…") {
+        _updateResult.value = container.updateChecker.check()
+    }
+
+    // ---------- F7.1 树生成 ----------
 
     // ---------- F7.1 树生成 ----------
 

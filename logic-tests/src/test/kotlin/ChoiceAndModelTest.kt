@@ -2,6 +2,8 @@ import com.ecs.agent.AgentClient
 import com.ecs.agent.PaperScanner
 import com.ecs.core.export.Exporter
 import com.ecs.core.model.*
+import com.ecs.core.model.BuiltInEndpoints
+import com.ecs.core.model.ModelCatalog
 import com.ecs.core.parse.ChoiceStripper
 import com.ecs.core.rules.Validation
 import com.ecs.core.tree.KaodianTree
@@ -143,7 +145,9 @@ class ChoiceAnnotationGuardTest {
 }
 
 class ScannerStrippingTest {
-    private val scanner = PaperScanner(AgentClient { AgentClient.Config(ModelCatalog.MODELS.first(), "") })
+    private val scanner = PaperScanner(
+        AgentClient { AgentClient.Config(BuiltInEndpoints.ALL.first(), ModelCatalog.DEFAULT_TEXT) }
+    )
 
     @Test fun `a recognised choice question becomes a fill-in record`() {
         val q = scanner.toQuestion(
@@ -207,72 +211,18 @@ class NoOptionsPersistedTest {
     }
 }
 
-class ModelCatalogTest {
-    @Test fun `defaults resolve to real entries`() {
-        assertNotNull(ModelCatalog.byId(ModelCatalog.DEFAULT_TEXT))
-        assertNotNull(ModelCatalog.byId(ModelCatalog.DEFAULT_VISION))
-        assertTrue(ModelCatalog.byId(ModelCatalog.DEFAULT_VISION)!!.vision)
-    }
-
-    @Test fun `the named GLM vision models are present`() {
+class ModelSuggestionTest {
+    @Test fun `the named GLM vision models are still in the suggestion list`() {
         listOf("glm-4.6v-flash", "glm-4.1v-thinking-flash").forEach { id ->
             val spec = assertNotNull(ModelCatalog.byId(id), "missing $id")
-            assertEquals(ModelCatalog.Provider.ZHIPU, spec.provider)
+            assertEquals(BuiltInEndpoints.ZHIPU, spec.endpointId)
             assertTrue(spec.vision)
         }
     }
 
-    @Test fun `zhipu speaks the openai protocol, anthropic does not`() {
-        assertTrue(ModelCatalog.Provider.ZHIPU.openAiCompatible)
-        assertFalse(ModelCatalog.Provider.ANTHROPIC.openAiCompatible)
-        assertEquals(
-            "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-            ModelCatalog.Provider.ZHIPU.endpoint,
-        )
-    }
-
-    @Test fun `every vision model is in the full list`() {
-        assertTrue(ModelCatalog.MODELS.containsAll(ModelCatalog.VISION_MODELS))
-    }
-
-    @Test fun `an unknown id falls back to a custom spec instead of failing`() {
-        val spec = ModelCatalog.resolve("glm-9v-future", ModelCatalog.Provider.ZHIPU, vision = true)
-        assertEquals(ModelCatalog.Provider.ZHIPU, spec.provider)
-        assertTrue(spec.vision)
-        assertEquals("glm-9v-future", spec.id)
-    }
-}
-
-class ProviderResponseTest {
-    private val client = AgentClient { AgentClient.Config(ModelCatalog.MODELS.first(), "") }
-
-    @Test fun `anthropic response shape`() {
-        val raw = """{"content":[{"type":"text","text":"{\"choice\":1}"}]}"""
-        assertEquals(
-            """{"choice":1}""",
-            client.extractText(raw, ModelCatalog.Provider.ANTHROPIC),
-        )
-    }
-
-    @Test fun `openai compatible response shape`() {
-        val raw = """{"choices":[{"message":{"role":"assistant","content":"{\"choice\":2}"}}]}"""
-        assertEquals(
-            """{"choice":2}""",
-            client.extractText(raw, ModelCatalog.Provider.ZHIPU),
-        )
-    }
-
-    @Test fun `wrong shape raises instead of returning empty`() {
-        assertFailsWith<AgentClient.AgentException> {
-            client.extractText("""{"choices":[]}""", ModelCatalog.Provider.ZHIPU)
-        }
-        assertFailsWith<AgentClient.AgentException> {
-            client.extractText("""{"choices":[]}""", ModelCatalog.Provider.ANTHROPIC)
-        }
-    }
-
-    @Test fun `anthropic joins multiple text blocks`() {
-        val raw = """{"content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}"""
-        assertEquals("a\nb", client.extractText(raw, ModelCatalog.Provider.ANTHROPIC))
+    @Test fun `defaults resolve to real entries`() {
+        assertNotNull(ModelCatalog.byId(ModelCatalog.DEFAULT_TEXT))
+        assertNotNull(ModelCatalog.byId(ModelCatalog.DEFAULT_VISION))
+        assertTrue(ModelCatalog.byId(ModelCatalog.DEFAULT_VISION)!!.vision)
     }
 }

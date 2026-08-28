@@ -2,6 +2,7 @@ package com.ecs.agent
 
 import com.ecs.core.agg.Aggregator
 import com.ecs.core.model.ErrorRecord
+import com.ecs.core.prompt.PromptSlot
 import com.ecs.core.report.ReportBuilder
 import com.ecs.core.rules.StyleGuard
 import com.ecs.core.tree.KaodianTree
@@ -13,15 +14,10 @@ import kotlinx.serialization.json.jsonPrimitive
  * F7.4 报告生成。数字由本地聚合给出，模型只写判断句。
  * 反过来做（把原始数据丢给模型让它自己数）必然出现算错但读着顺的报告。
  */
-class Reporter(private val client: AgentClient) {
-
-    private fun system(kind: String) = """
-        你在写一份英语错题诊断报告的「$kind」部分。数字已经算好，不要重算，也不要复述。
-        只写判断：看到什么该往哪走、什么和什么容易混、下一步具体做什么。
-        每句话都要能直接落到一个动作上。
-
-        ${StyleGuard.PROMPT_RULE}
-    """.trimIndent()
+class Reporter(
+    private val client: AgentClient,
+    private val prompts: PromptProvider = PromptProvider.DEFAULT,
+) {
 
     suspend fun micro(stat: Aggregator.KaodianStat): ReportBuilder.MicroNarrative {
         val user = """
@@ -35,7 +31,7 @@ class Reporter(private val client: AgentClient) {
               "fix_path": "专练什么，盯什么特征，练到看见什么条件反射想到什么"
             }
         """.trimIndent()
-        val o = client.obj(client.complete(system("小方向"), user, maxTokens = 1500))
+        val o = client.obj(client.complete(prompts.text(PromptSlot.REPORT_MICRO), user, maxTokens = 1500))
         fun s(k: String) = StyleGuard.clean(o[k]?.jsonPrimitive?.content.orEmpty())
         return ReportBuilder.MicroNarrative(
             eyeCommonality = s("eye_commonality"),
@@ -70,7 +66,7 @@ class Reporter(private val client: AgentClient) {
               "conclusion": "一句话结论"
             }
         """.trimIndent()
-        val o = client.obj(client.complete(system("大方向"), user, maxTokens = 4000))
+        val o = client.obj(client.complete(prompts.text(PromptSlot.REPORT_MACRO), user, maxTokens = 4000))
         fun s(k: String) = StyleGuard.clean(o[k]?.jsonPrimitive?.content.orEmpty())
 
         val priorities = o["priorities"]?.jsonArray.orEmpty().mapNotNull { el ->

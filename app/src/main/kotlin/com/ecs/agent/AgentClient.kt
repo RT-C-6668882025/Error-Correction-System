@@ -1,8 +1,8 @@
 package com.ecs.agent
 
+import com.ecs.core.model.ApiEndpoint
 import com.ecs.core.model.ModelCatalog
-import com.ecs.core.model.ModelCatalog.ModelSpec
-import com.ecs.core.model.ModelCatalog.Provider
+import com.ecs.core.model.Protocol
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -35,7 +35,7 @@ class AgentClient(
     /** 识别走视觉模型，其余走文本模型。 */
     enum class Role { TEXT, VISION }
 
-    data class Config(val model: ModelSpec, val apiKey: String)
+    data class Config(val endpoint: ApiEndpoint, val modelId: String)
 
     class AgentException(message: String) : Exception(message)
 
@@ -57,34 +57,64 @@ class AgentClient(
         role: Role = Role.TEXT,
     ): String = withContext(Dispatchers.IO) {
         val config = resolver(role)
-        if (config.apiKey.isBlank()) {
-            throw AgentException("未配置 ${config.model.provider.label} 的 API Key")
-        }
-        val provider = config.model.provider
-        val body = if (provider.openAiCompatible) {
-            openAiBody(config.model.id, system, user, images, maxTokens, temperature)
-        } else {
-            anthropicBody(config.model.id, system, user, images, maxTokens, temperature)
+        call(config.endpoint, config.modelId, system, user, images, maxTokens, temperature)
+    }
+
+    private fun call(
+        endpoint: ApiEndpoint,
+        modelId: String,
+        system: String,
+        user: String,
+        images: List<Image>,
+        maxTokens: Int,
+        temperature: Double,
+    ): String {
+        if (endpoint.baseUrl.isBlank()) throw AgentException("${endpoint.name} 未填地址")
+        if (endpoint.apiKey.isBlank()) throw AgentException("${endpoint.name} 未配置 API Key")
+        if (modelId.isBlank()) throw AgentException("${endpoint.name} 未指定模型 ID")
+
+        val body = when (endpoint.protocol) {
+            Protocol.OPENAI -> openAiBody(modelId, system, user, images, maxTokens, temperature)
+            Protocol.ANTHROPIC -> anthropicBody(modelId, system, user, images, maxTokens, temperature)
         }
 
         val builder = Request.Builder()
-            .url(provider.endpoint)
+            .url(endpoint.url)
             .addHeader("content-type", "application/json")
             .post(body.toString().toRequestBody(JSON_MEDIA))
-        if (provider.openAiCompatible) {
-            builder.addHeader("Authorization", "Bearer ${config.apiKey}")
-        } else {
-            builder.addHeader("x-api-key", config.apiKey)
-            builder.addHeader("anthropic-version", ANTHROPIC_VERSION)
+        when (endpoint.protocol) {
+            Protocol.OPENAI -> builder.addHeader("Authorization", "Bearer ${endpoint.apiKey}")
+            Protocol.ANTHROPIC -> {
+                builder.addHeader("x-api-key", endpoint.apiKey)
+                builder.addHeader("anthropic-version", ANTHROPIC_VERSION)
+            }
         }
 
-        http.newCall(builder.build()).execute().use { resp ->
+        return http.newCall(builder.build()).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
-                throw AgentException("${config.model.label} 调用失败 ${resp.code}：${text.take(300)}")
+                // 中转站配错时这条信息是唯一线索，原样带回状态码与响应片段
+                throw AgentException("$modelId 调用失败 ${resp.code}：${text.take(300)}")
             }
-            extractText(text, provider)
+            extractText(text, endpoint.protocol)
         }
+    }
+
+    /**
+     * 测试连接：发一次最小请求。中转站地址、协议、Key 三者错任意一个，
+     * 报错都长得一样，这里把原始状态码和响应片段直接抛出来。
+     */
+    suspend fun ping(endpoint: ApiEndpoint, modelId: String): String = withContext(Dispatchers.IO) {
+        val reply = call(
+            endpoint = endpoint,
+            modelId = modelId,
+            system = "回答要极短。",
+            user = "回一个字：好",
+            images = emptyList(),
+            maxTokens = 16,
+            temperature = 0.0,
+        )
+        "连通：${endpoint.url}　模型回了「${reply.trim().take(20)}」"
     }
 
     // ---------- 请求体 ----------
@@ -140,8 +170,8 @@ class AgentClient(
     ): JsonObject = buildJsonObject {
         put("model", model)
         put("max_tokens", maxTokens)
-        // 智谱的 temperature 区间不含 0，传 0 会被拒
-        put("temperature", temperature.coerceAtLeast(ModelCatalog.ZHIPU_MIN_TEMPERATURE))
+        // OpenAI 兼容端的 temperature 区间不含 0（智谱如此，多数中转站跟随），传 0 会被拒
+        put("temperature", temperature.coerceAtLeast(ModelCatalog.OPENAI_MIN_TEMPERATURE))
         putJsonArray("messages") {
             add(
                 buildJsonObject {
@@ -178,9 +208,9 @@ class AgentClient(
     // ---------- 取值 ----------
 
     /** 两种协议的正文路径不同；思考型模型的推理过程不在 content 里，取到的就是答案。 */
-    fun extractText(raw: String, provider: Provider): String {
+    fun extractText(raw: String, protocol: Protocol): String {
         val root = json.parseToJsonElement(raw).jsonObject
-        return if (provider.openAiCompatible) {
+        return if (protocol == Protocol.OPENAI) {
             root["choices"]?.jsonArray?.firstOrNull()
                 ?.jsonObject?.get("message")?.jsonObject
                 ?.get("content")?.jsonPrimitive?.content
