@@ -73,6 +73,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _macroDepth = MutableStateFlow(2)
     val macroDepth: StateFlow<Int> = _macroDepth.asStateFlow()
 
+    /** 识别结果暂存，供确认页使用。选项在这里可见，入库时丢弃。 */
+    private val _scanned = MutableStateFlow<List<PaperScanner.Question>>(emptyList())
+    val scanned: StateFlow<List<PaperScanner.Question>> = _scanned.asStateFlow()
+
+    private val _proposals = MutableStateFlow<List<TreeMaintainer.Proposal>>(emptyList())
+    val proposals: StateFlow<List<TreeMaintainer.Proposal>> = _proposals.asStateFlow()
+
+    private val _microNarrative = MutableStateFlow<Map<String, ReportBuilder.MicroNarrative>>(emptyMap())
+    val microNarrative: StateFlow<Map<String, ReportBuilder.MicroNarrative>> = _microNarrative.asStateFlow()
+
+    private val _macroNarrative = MutableStateFlow(ReportBuilder.MacroNarrative())
+    val macroNarrative: StateFlow<ReportBuilder.MacroNarrative> = _macroNarrative.asStateFlow()
+
     private val _promptOverrides = MutableStateFlow<Map<PromptSlot, String>>(emptyMap())
     val promptOverrides: StateFlow<Map<PromptSlot, String>> = _promptOverrides.asStateFlow()
 
