@@ -2,6 +2,7 @@ package com.ecs
 
 import android.app.Application
 import com.ecs.agent.AgentClient
+import com.ecs.core.model.ModelCatalog
 import com.ecs.agent.Annotator
 import com.ecs.agent.PaperScanner
 import com.ecs.agent.Reporter
@@ -36,10 +37,18 @@ class Container(app: Application) {
         settings = settings,
         backup = backup,
     )
-    val client = AgentClient(
-        apiKeyProvider = { settings.apiKey.first() },
-        modelProvider = { settings.model.first() },
-    )
+    val client = AgentClient { role ->
+        val id = when (role) {
+            AgentClient.Role.TEXT -> settings.textModel.first()
+            AgentClient.Role.VISION -> settings.visionModel.first()
+        }
+        val spec = ModelCatalog.resolve(
+            id = id,
+            fallbackProvider = ModelCatalog.Provider.ANTHROPIC,
+            vision = role == AgentClient.Role.VISION,
+        )
+        AgentClient.Config(model = spec, apiKey = settings.keyFor(spec.provider))
+    }
     val treeGenerator = TreeGenerator(client)
     val annotator = Annotator(client)
     val verifier = Verifier(client)

@@ -13,6 +13,7 @@ import com.ecs.core.agg.Aggregator
 import com.ecs.core.export.CsvImporter
 import com.ecs.core.export.Exporter
 import com.ecs.core.model.ErrorRecord
+import com.ecs.core.model.ModelCatalog
 import com.ecs.core.model.RecordStatus
 import com.ecs.core.model.Section
 import com.ecs.core.model.Verified
@@ -47,8 +48,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
-    private val _apiKey = MutableStateFlow("")
-    val apiKey: StateFlow<String> = _apiKey.asStateFlow()
+    private val _anthropicKey = MutableStateFlow("")
+    val anthropicKey: StateFlow<String> = _anthropicKey.asStateFlow()
+
+    private val _zhipuKey = MutableStateFlow("")
+    val zhipuKey: StateFlow<String> = _zhipuKey.asStateFlow()
+
+    private val _textModel = MutableStateFlow(ModelCatalog.DEFAULT_TEXT)
+    val textModel: StateFlow<String> = _textModel.asStateFlow()
+
+    private val _visionModel = MutableStateFlow(ModelCatalog.DEFAULT_VISION)
+    val visionModel: StateFlow<String> = _visionModel.asStateFlow()
 
     private val _microDepth = MutableStateFlow(3)
     val microDepth: StateFlow<Int> = _microDepth.asStateFlow()
@@ -72,7 +82,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     init {
         viewModelScope.launch {
             container.treeStore.load()
-            _apiKey.value = runCatching { container.settings.apiKey.first() }.getOrDefault("")
+            _anthropicKey.value = runCatching { container.settings.anthropicKey.first() }.getOrDefault("")
+            _zhipuKey.value = runCatching { container.settings.zhipuKey.first() }.getOrDefault("")
+            _textModel.value = runCatching { container.settings.textModel.first() }
+                .getOrDefault(ModelCatalog.DEFAULT_TEXT)
+            _visionModel.value = runCatching { container.settings.visionModel.first() }
+                .getOrDefault(ModelCatalog.DEFAULT_VISION)
             _microDepth.value = runCatching { container.settings.microDepth.first() }.getOrDefault(3)
             _macroDepth.value = runCatching { container.settings.macroDepth.first() }.getOrDefault(2)
             repo.sweepDormancy()
@@ -97,9 +112,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- 设置 ----------
 
-    fun setApiKey(v: String) {
-        _apiKey.value = v
-        viewModelScope.launch { container.settings.setApiKey(v) }
+    fun setAnthropicKey(v: String) {
+        _anthropicKey.value = v
+        viewModelScope.launch { container.settings.setAnthropicKey(v) }
+    }
+
+    fun setZhipuKey(v: String) {
+        _zhipuKey.value = v
+        viewModelScope.launch { container.settings.setZhipuKey(v) }
+    }
+
+    fun setTextModel(v: String) {
+        _textModel.value = v
+        viewModelScope.launch { container.settings.setTextModel(v) }
+    }
+
+    fun setVisionModel(v: String) {
+        _visionModel.value = v
+        viewModelScope.launch { container.settings.setVisionModel(v) }
+    }
+
+    /** 当前选中的模型缺不缺 Key——设置页用它给出准确提示。 */
+    fun missingKeyFor(modelId: String, vision: Boolean): Boolean {
+        val spec = ModelCatalog.resolve(modelId, vision = vision)
+        return when (spec.provider) {
+            ModelCatalog.Provider.ANTHROPIC -> _anthropicKey.value.isBlank()
+            ModelCatalog.Provider.ZHIPU -> _zhipuKey.value.isBlank()
+        }
     }
 
     fun setMicroDepth(v: Int) {
@@ -157,7 +196,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         val result = repo.quickAdd(paper, section, spec, total, details = details)
         val stems = questions.associate { q -> (q.no to q.slot) to q.stem }
+        val optionsByKey = questions.associate { q ->
+            (q.no to q.slot) to q.options.map { it.content }
+        }
         val lowConfidence = questions.filter { it.confidence < 0.8 }.size
+        val stripped = questions.count { it.isChoice }
 
         if (autoAnnotate) {
             val t = tree.value
@@ -165,22 +208,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 _message.value = "已录入 ${result.inserted} 条；考点树未生成，标注跳过"
             } else {
                 var done = 0
+                var refused = 0
                 result.records.forEach { r ->
-                    val stem = stems[r.src.no to r.src.slot].orEmpty()
+                    val key = r.src.no to r.src.slot
+                    val stem = stems[key].orEmpty()
                     if (stem.isBlank()) return@forEach
                     runCatching {
                         val out = container.annotator.annotate(
-                            Annotator.Input(stem, r.given, r.answer, section.label), t
+                            Annotator.Input(
+                                stem, r.given, r.answer, section.label, optionsByKey[key].orEmpty()
+                            ),
+                            t,
                         )
                         repo.saveAnnotation(container.annotator.apply(r, out, t))
-                        done++
+                        if (out.notFormType) refused++ else done++
                     }
                 }
-                _message.value = "已录入 ${result.inserted} 条，标注 $done 条" +
-                    if (lowConfidence > 0) "；$lowConfidence 个空识别置信度偏低，留在待完善" else ""
+                _message.value = buildString {
+                    append("已录入 ${result.inserted} 条，标注 $done 条")
+                    if (stripped > 0) append("；剥离选择题 $stripped 道")
+                    if (refused > 0) append("；$refused 道推不出形态，已挡在人工队列")
+                    if (lowConfidence > 0) append("；$lowConfidence 个空识别置信度偏低，留在待完善")
+                }
             }
         } else {
-            _message.value = "已录入 ${result.inserted} 条"
+            _message.value = "已录入 ${result.inserted} 条" +
+                if (stripped > 0) "；剥离选择题 $stripped 道" else ""
         }
         _scanned.value = emptyList()
     }
@@ -196,19 +249,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- F7.2 标注 ----------
 
-    fun annotate(record: ErrorRecord, stem: String) = run("标注中…") {
-        val t = tree.value ?: throw IllegalStateException("考点树尚未生成")
-        val out = container.annotator.annotate(
-            Annotator.Input(stem, record.given, record.answer, record.src.section.label), t
-        )
-        val annotated = container.annotator.apply(record, out, t)
-        val saved = repo.saveAnnotation(annotated)
-        _message.value = if (out.unmatched) {
-            "五个候选都不匹配，已记为待归位"
-        } else {
-            "已标注：${saved.kaodian}（${saved.status.label}）"
+    fun annotate(record: ErrorRecord, stem: String, options: List<String> = emptyList()) =
+        run("标注中…") {
+            val t = tree.value ?: throw IllegalStateException("考点树尚未生成")
+            val out = container.annotator.annotate(
+                Annotator.Input(stem, record.given, record.answer, record.src.section.label, options), t
+            )
+            val saved = repo.saveAnnotation(container.annotator.apply(record, out, t))
+            _message.value = when {
+                out.notFormType -> "剥离后推不出形态，这题不属于填空类考点，已记为不完整进人工队列"
+                out.unmatched -> "五个候选都不匹配，已记为待归位"
+                else -> "已标注：${saved.kaodian}（${saved.status.label}）"
+            }
         }
-    }
 
     /** 待完善批量标注：题干缺失时用 given + answer 兜底。 */
     fun annotateBatch(targets: List<ErrorRecord>, stems: Map<String, String> = emptyMap()) =
