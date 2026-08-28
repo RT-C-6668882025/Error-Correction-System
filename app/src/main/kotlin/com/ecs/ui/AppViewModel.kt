@@ -1,11 +1,11 @@
 package com.ecs.ui
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ecs.Container
 import com.ecs.EcsApp
-import com.ecs.agent.AgentClient
 import com.ecs.agent.Annotator
 import com.ecs.agent.PaperScanner
 import com.ecs.core.agg.Aggregator
@@ -20,6 +20,8 @@ import com.ecs.core.report.ReportBuilder
 import com.ecs.core.tree.KaodianTree
 import com.ecs.data.repo.RecordRepository
 import com.ecs.data.update.UpdateChecker
+import com.ecs.ui.util.ImageLoader
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -27,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -211,7 +214,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- 录入 ----------
 
-    fun scan(images: List<AgentClient.Image>, section: Section) = run("识别中…") {
+    /**
+     * 收的是 Uri 不是编好的 base64：压缩与编码都在 IO 线程上做。
+     * 原来在 onClick 里直接 readBytes + encode，大图会先卡住主线程，
+     * 编出来的几十兆正文再把上传拖到超时。
+     */
+    fun scan(uris: List<Uri>, section: Section) = run("识别中…") {
+        val images = withContext(Dispatchers.IO) {
+            ImageLoader.loadAll(getApplication<Application>(), uris)
+        }
+        if (images.isEmpty()) {
+            _message.value = "这些图片读不出来，换几张再试"
+            return@run
+        }
         _scanned.value = container.scanner.scan(images, section)
         _message.value = "识别到 ${_scanned.value.size} 个空"
     }

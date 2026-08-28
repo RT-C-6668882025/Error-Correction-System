@@ -19,6 +19,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -39,9 +40,16 @@ class AgentClient(
 
     class AgentException(message: String) : Exception(message)
 
+    /**
+     * 四个超时都要显式设。识别请求的正文是整张图的 base64，
+     * OkHttp 默认的 writeTimeout 只有 10 秒，手机上传根本发不完——
+     * 这是「识别超时」最常见的那一种。
+     */
     private val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
         .readTimeout(180, TimeUnit.SECONDS)
+        .callTimeout(300, TimeUnit.SECONDS)
         .build()
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -90,14 +98,30 @@ class AgentClient(
             }
         }
 
-        return http.newCall(builder.build()).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) {
-                // 中转站配错时这条信息是唯一线索，原样带回状态码与响应片段
-                throw AgentException("$modelId 调用失败 ${resp.code}：${text.take(300)}")
+        return try {
+            http.newCall(builder.build()).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    // 中转站配错时这条信息是唯一线索，原样带回状态码与响应片段
+                    throw AgentException("$modelId 调用失败 ${resp.code}：${text.take(300)}")
+                }
+                extractText(text, endpoint.protocol)
             }
-            extractText(text, endpoint.protocol)
+        } catch (e: InterruptedIOException) {
+            // 超时冒到 UI 上是一句 SocketTimeoutException，看不出卡在哪一步
+            throw AgentException(timeoutMessage(modelId, images.size, e))
         }
+    }
+
+    /** 连不上 / 图片没发完 / 模型没回，三种超时给的建议不一样。 */
+    private fun timeoutMessage(modelId: String, imageCount: Int, e: InterruptedIOException): String {
+        val detail = e.message.orEmpty()
+        val stage = when {
+            detail.contains("connect", ignoreCase = true) -> "连不上服务器，检查端点地址和网络"
+            imageCount > 0 -> "图片还没传完。少选几张（现在 $imageCount 张），或换到 Wi-Fi"
+            else -> "模型迟迟没有返回，可以换一个更快的模型"
+        }
+        return "$modelId 超时：$stage"
     }
 
     /**

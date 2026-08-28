@@ -39,10 +39,13 @@ object ModelCatalog {
         ModelSpec("kimi-k2-turbo-preview", "Kimi K2 Turbo", BuiltInEndpoints.MOONSHOT, vision = false),
         ModelSpec("moonshot-v1-8k-vision-preview", "Kimi 视觉", BuiltInEndpoints.MOONSHOT, vision = true),
         ModelSpec("MiniMax-Text-01", "MiniMax Text 01", BuiltInEndpoints.MINIMAX, vision = false),
-        ModelSpec("deepseek-chat", "DeepSeek Chat", BuiltInEndpoints.DEEPSEEK, vision = false, note = "V3 系"),
         ModelSpec(
-            "deepseek-reasoner", "DeepSeek Reasoner", BuiltInEndpoints.DEEPSEEK,
-            vision = false, note = "推理型",
+            "deepseek-v4-flash", "DeepSeek V4 Flash", BuiltInEndpoints.DEEPSEEK,
+            vision = false, note = "快，1M 上下文",
+        ),
+        ModelSpec(
+            "deepseek-v4-pro", "DeepSeek V4 Pro", BuiltInEndpoints.DEEPSEEK,
+            vision = false, note = "更强",
         ),
         ModelSpec("glm-ocr", "GLM-OCR", BuiltInEndpoints.ZHIPU, vision = true, note = "专做识别，0.9B"),
     )
@@ -55,6 +58,20 @@ object ModelCatalog {
 
     const val DEFAULT_TEXT_ENDPOINT = BuiltInEndpoints.ANTHROPIC
     const val DEFAULT_VISION_ENDPOINT = BuiltInEndpoints.ZHIPU
+
+    /**
+     * 厂商下线旧 ID 时的改名表。存在 DataStore 里的旧值不会自己变，
+     * 不归一的话老用户会一直拿失效 ID 去请求，报错还看不出原因。
+     *
+     * deepseek-chat / deepseek-reasoner 于 2026-07-24 彻底下线，指向 V4 对应档位。
+     */
+    private val RENAMED = mapOf(
+        "deepseek-chat" to "deepseek-v4-flash",
+        "deepseek-reasoner" to "deepseek-v4-pro",
+    )
+
+    /** 清单外的自定义 ID 原样返回——用户自己填的不归我管。 */
+    fun canonical(id: String): String = RENAMED[id] ?: id
 
     fun byId(id: String): ModelSpec? = MODELS.firstOrNull { it.id == id }
 

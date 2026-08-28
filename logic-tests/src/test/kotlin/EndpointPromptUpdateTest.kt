@@ -159,11 +159,31 @@ class EndpointTest {
 
     @Test fun `deepseek text models are suggested, glm-ocr is a vision one`() {
         val ds = ModelCatalog.suggestionsFor(BuiltInEndpoints.DEEPSEEK, vision = false).map { it.id }
-        assertTrue(ds.containsAll(listOf("deepseek-chat", "deepseek-reasoner")))
+        assertTrue(ds.containsAll(listOf("deepseek-v4-flash", "deepseek-v4-pro")))
         assertTrue(ModelCatalog.suggestionsFor(BuiltInEndpoints.DEEPSEEK, vision = true).isEmpty())
 
         val ocr = assertNotNull(ModelCatalog.byId("glm-ocr"))
         assertTrue(ocr.vision)
+    }
+
+    @Test fun `retired deepseek ids are gone from the catalog`() {
+        // 2026-07-24 之后这两个 ID 请求直接报错，清单里不能再出现
+        assertNull(ModelCatalog.byId("deepseek-chat"))
+        assertNull(ModelCatalog.byId("deepseek-reasoner"))
+    }
+
+    @Test fun `retired model ids are canonicalized, custom ones are left alone`() {
+        assertEquals("deepseek-v4-flash", ModelCatalog.canonical("deepseek-chat"))
+        assertEquals("deepseek-v4-pro", ModelCatalog.canonical("deepseek-reasoner"))
+        // 用户自己填的 ID 不归我管，原样返回
+        assertEquals("my-relay/some-model", ModelCatalog.canonical("my-relay/some-model"))
+        assertEquals(ModelCatalog.DEFAULT_VISION, ModelCatalog.canonical(ModelCatalog.DEFAULT_VISION))
+    }
+
+    @Test fun `every renamed target actually exists`() {
+        listOf("deepseek-chat", "deepseek-reasoner").forEach {
+            assertNotNull(ModelCatalog.byId(ModelCatalog.canonical(it)))
+        }
     }
 
     @Test fun `no two models share an id`() {

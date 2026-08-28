@@ -1,7 +1,6 @@
 package com.ecs.ui.screen
 
 import android.net.Uri
-import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,7 +31,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
-import com.ecs.agent.AgentClient
 import com.ecs.core.model.Section
 import com.ecs.core.model.activeEndpoints
 import com.ecs.ui.AppViewModel
@@ -114,7 +112,6 @@ private fun KeyBar(vm: AppViewModel) {
 
 @Composable
 private fun ScanEntry(vm: AppViewModel, nav: NavHostController) {
-    val context = LocalContext.current
     var section by remember { mutableStateOf(Section.GF) }
     var picked by remember { mutableStateOf<List<Uri>>(emptyList()) }
 
@@ -141,17 +138,8 @@ private fun ScanEntry(vm: AppViewModel, nav: NavHostController) {
             Button(
                 enabled = picked.isNotEmpty(),
                 onClick = {
-                    val images = picked.mapNotNull { uri ->
-                        runCatching {
-                            context.contentResolver.openInputStream(uri)?.use { input ->
-                                AgentClient.Image(
-                                    mediaType = context.contentResolver.getType(uri) ?: "image/jpeg",
-                                    base64 = Base64.encodeToString(input.readBytes(), Base64.NO_WRAP),
-                                )
-                            }
-                        }.getOrNull()
-                    }
-                    vm.scan(images, section)
+                    // 压缩与编码交给 ViewModel 在 IO 线程做，这里只递 Uri
+                    vm.scan(picked, section)
                     nav.navigate(Routes.CONFIRM)
                 },
             ) { Text("识别") }
