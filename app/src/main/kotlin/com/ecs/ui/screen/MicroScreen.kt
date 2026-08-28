@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.ecs.core.agg.Aggregator
 import com.ecs.core.report.ReportBuilder
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.BusyBar
@@ -31,13 +32,14 @@ import com.ecs.ui.component.SectionCard
 @Composable
 fun MicroScreen(vm: AppViewModel) {
     val records by vm.records.collectAsState()
+    val tree by vm.tree.collectAsState()
     val busy by vm.busy.collectAsState()
     val depth by vm.microDepth.collectAsState()
     val narratives by vm.microNarrative.collectAsState()
     val maturity = vm.maturity()
     var selected by remember { mutableStateOf<String?>(null) }
 
-    val stats = vm.stats(depth).filter { it.reportable }
+    val stats = Aggregator.kaodianStats(records, tree, depth).filter { it.reportable }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         BusyBar(busy)

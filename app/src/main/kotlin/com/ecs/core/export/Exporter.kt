@@ -163,7 +163,7 @@ object Exporter {
 | `tree_version` | string | 标注时的考点树版本 |
 | `verified` | enum | 抽检结果：未抽检 / 一致 / 冲突 / 人工确认 |
 | `status` | enum | 活跃 / 休眠（两者参与统计）；归档 / 待补答案 / 不完整（不参与） |
-        """.trimIndent().lines()
+        """.trimIndent().lines() + ""
     }
 
     private fun tail(records: List<ErrorRecord>): List<String> {

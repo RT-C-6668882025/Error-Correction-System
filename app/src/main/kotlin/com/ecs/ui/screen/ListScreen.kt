@@ -37,7 +37,6 @@ import com.ecs.core.rules.Validation
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.Badge
 import com.ecs.ui.component.BusyBar
-import com.ecs.ui.component.SectionCard
 
 @Composable
 fun ListScreen(vm: AppViewModel) {
@@ -151,8 +150,8 @@ private fun TodoChip(label: String, selected: Boolean, onClick: () -> Unit) {
 @Composable
 private fun RecordRow(r: ErrorRecord, onClick: () -> Unit) {
     Card(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
         onClick = onClick,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
     ) {
         Column(Modifier.padding(12.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {

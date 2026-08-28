@@ -328,7 +328,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- 派生视图 ----------
 
-    fun stats(depth: Int) = Aggregator.kaodianStats(records.value, tree.value, depth)
     fun maturity() = Aggregator.maturity(records.value)
     fun consistency() = Aggregator.consistency(records.value)
     fun rates() = Aggregator.sectionRates(records.value)
