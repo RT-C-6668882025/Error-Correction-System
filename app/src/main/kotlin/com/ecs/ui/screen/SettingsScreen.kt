@@ -36,6 +36,7 @@ import com.ecs.core.model.ApiEndpoint
 import com.ecs.core.model.ModelCatalog
 import com.ecs.core.model.Protocol
 import com.ecs.core.model.activeEndpoints
+import com.ecs.core.tree.Skeleton
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.ApiKeyField
 import com.ecs.ui.component.Badge
@@ -210,17 +211,42 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
         }
 
         SectionCard("考点树") {
+            // 前两层是写死的骨架，模型只填末端；这里看的是哪几支已经填上了
+            val covered = tree?.liveNodes.orEmpty()
+                .mapNotNull { Skeleton.branchOf(it.path)?.path }
+                .toSet()
+            val missing = Skeleton.BRANCHES.filterNot { it.path in covered }
+
             Text(
-                tree?.let { "${it.version} · ${it.liveNodes.size} 个末端节点" } ?: "尚未生成",
+                tree?.let {
+                    "${it.version} · ${it.liveNodes.size} 个末端节点 · " +
+                        "${covered.size}/${Skeleton.BRANCHES.size} 支已生成"
+                } ?: "尚未生成（第一次标注时会自动生成）",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),
             )
             Text(
-                "生成 120-180 个末端节点，每个带规则形态与向量。没有树就没有 form_rule，标注无从谈起。",
+                "大类与中类固定：词法 9 支、句法 3 支、语法 7 支。模型只往下细分到能对应一个动作的末端，" +
+                    "一支一次调用，失败只损失那一支。没有树就没有 form_rule，标注无从谈起。",
                 style = MaterialTheme.typography.labelSmall,
             )
-            Button(onClick = { vm.generateTree() }, modifier = Modifier.padding(top = 8.dp)) {
-                Text(if (tree == null) "生成考点树" else "重新生成（会换版本）")
+            if (missing.isNotEmpty() && tree != null) {
+                Text(
+                    "缺：${missing.joinToString("、") { it.path }}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { vm.generateTree() }) {
+                    Text(if (tree == null) "生成考点树" else "全部重新生成")
+                }
+                if (missing.isNotEmpty() && tree != null) {
+                    OutlinedButton(onClick = { vm.regenerateBranches(missing) }) {
+                        Text("只补这 ${missing.size} 支")
+                    }
+                }
             }
         }
 
