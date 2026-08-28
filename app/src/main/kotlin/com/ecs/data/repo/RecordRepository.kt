@@ -25,14 +25,7 @@ class RecordRepository(
 
     val all: Flow<List<ErrorRecord>> = dao.observeAll().map { rows -> rows.map { it.toModel() } }
 
-    val conflicts: Flow<List<ErrorRecord>> = dao.observeConflicts().map { rows -> rows.map { it.toModel() } }
-
-    fun byStatus(status: RecordStatus): Flow<List<ErrorRecord>> =
-        dao.observeByStatus(status.label).map { rows -> rows.map { it.toModel() } }
-
     suspend fun snapshot(): List<ErrorRecord> = dao.all().map { it.toModel() }
-
-    suspend fun get(uid: String): ErrorRecord? = dao.byUid(uid)?.toModel()
 
     /**
      * F1.2 极简录入：卷名 + 错题号，其余留空，status = 不完整。
@@ -107,11 +100,6 @@ class RecordRepository(
         val settled = withRule.copy(status = Validation.deriveStatus(withRule, tree))
         dao.update(settled.toEntity())
         return settled
-    }
-
-    suspend fun fillAnswer(uid: String, answer: String) {
-        val current = get(uid) ?: return
-        saveAnnotation(current.copy(answer = answer))
     }
 
     suspend fun delete(uid: String) = dao.delete(uid)

@@ -28,7 +28,6 @@ class BackupManager(private val context: Context) {
             File(dir, "README.md").writeText(pkg.readme)
             File(dir, "data.json").writeText(pkg.dataJson)
             File(dir, "data.csv").writeText(pkg.dataCsv)
-            File(dir, "倒推表.md").writeText(pkg.reverseTable)
             if (prune) prune()
             dir
         }
