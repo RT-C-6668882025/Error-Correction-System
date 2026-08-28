@@ -35,8 +35,14 @@ class Settings(private val context: Context) {
         BuiltInEndpoints.merge(decode(prefs[ENDPOINTS]))
     }
 
-    val textModel: Flow<String> = context.dataStore.data.map { it[TEXT_MODEL] ?: ModelCatalog.DEFAULT_TEXT }
-    val visionModel: Flow<String> = context.dataStore.data.map { it[VISION_MODEL] ?: ModelCatalog.DEFAULT_VISION }
+    // canonical：厂商下线的旧 ID（如 deepseek-chat）在读出来的这一刻就换成新的，
+    // 请求体和设置页显示同时自愈，不用等用户自己去改。
+    val textModel: Flow<String> = context.dataStore.data.map {
+        ModelCatalog.canonical(it[TEXT_MODEL] ?: ModelCatalog.DEFAULT_TEXT)
+    }
+    val visionModel: Flow<String> = context.dataStore.data.map {
+        ModelCatalog.canonical(it[VISION_MODEL] ?: ModelCatalog.DEFAULT_VISION)
+    }
     val textEndpoint: Flow<String> =
         context.dataStore.data.map { it[TEXT_ENDPOINT] ?: ModelCatalog.DEFAULT_TEXT_ENDPOINT }
     val visionEndpoint: Flow<String> =
