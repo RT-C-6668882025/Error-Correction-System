@@ -77,11 +77,19 @@ fun SourceScreen(vm: AppViewModel) {
                 label = { Text("待标注 $unannotated") },
             )
         }
-        Text(
-            "${filtered.size} 道",
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(horizontal = 12.dp),
-        )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("${filtered.size} 道", style = MaterialTheme.typography.labelMedium)
+            if (unannotated > 0) {
+                // 没标注就进不了复习页；考点树没生成的话会在这一步顺带生成
+                OutlinedButton(onClick = { vm.annotateAll() }) {
+                    Text("全部标注 $unannotated 条")
+                }
+            }
+        }
         LazyColumn(Modifier.fillMaxSize()) {
             items(filtered, key = { it.uid }) { r ->
                 Card(

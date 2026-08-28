@@ -86,7 +86,7 @@ fun ConfirmScreen(vm: AppViewModel, nav: NavHostController) {
 
         SectionCard("识别结果（${scanned.size} 个空）") {
             if (scanned.isEmpty()) {
-                Text("没有识别到内容。可以直接用极简录入先把错题号存下来。",
+                Text("没有识别到内容。回上一页重拍，或者入库后到原题页手动补题干。",
                     style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
             }
             scanned.forEach { q ->
