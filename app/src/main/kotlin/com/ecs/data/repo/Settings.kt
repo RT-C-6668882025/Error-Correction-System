@@ -27,8 +27,8 @@ class Settings(private val context: Context) {
     private val VISION_ENDPOINT = stringPreferencesKey("vision_endpoint")
     private val BATCH = intPreferencesKey("batch")
     private val LAST_BACKUP_AT = intPreferencesKey("last_backup_count")
-    private val MICRO_DEPTH = intPreferencesKey("micro_depth")
-    private val MACRO_DEPTH = intPreferencesKey("macro_depth")
+    private val LEVEL = intPreferencesKey("review_level")
+    private val KEY_LOCKED = stringPreferencesKey("key_locked")
 
     /** 预置项与存下来的合并：升级新增预置项时老用户也能看到。 */
     val endpoints: Flow<List<ApiEndpoint>> = context.dataStore.data.map { prefs ->
@@ -43,8 +43,11 @@ class Settings(private val context: Context) {
         context.dataStore.data.map { it[VISION_ENDPOINT] ?: ModelCatalog.DEFAULT_VISION_ENDPOINT }
 
     val batch: Flow<Int> = context.dataStore.data.map { it[BATCH] ?: 1 }
-    val microDepth: Flow<Int> = context.dataStore.data.map { it[MICRO_DEPTH] ?: 3 }
-    val macroDepth: Flow<Int> = context.dataStore.data.map { it[MACRO_DEPTH] ?: 2 }
+    /** 复习层级，4 = 末端。 */
+    val level: Flow<Int> = context.dataStore.data.map { it[LEVEL] ?: 4 }
+
+    /** Key 锁定：防止在录入页误触改坏已经能用的配置。 */
+    val keyLocked: Flow<Boolean> = context.dataStore.data.map { it[KEY_LOCKED] == "1" }
 
     private fun decode(raw: String?): List<ApiEndpoint> =
         if (raw.isNullOrBlank()) emptyList()
@@ -81,8 +84,8 @@ class Settings(private val context: Context) {
     suspend fun setVisionModel(v: String) { context.dataStore.edit { it[VISION_MODEL] = v } }
     suspend fun setTextEndpoint(v: String) { context.dataStore.edit { it[TEXT_ENDPOINT] = v } }
     suspend fun setVisionEndpoint(v: String) { context.dataStore.edit { it[VISION_ENDPOINT] = v } }
-    suspend fun setMicroDepth(v: Int) { context.dataStore.edit { it[MICRO_DEPTH] = v } }
-    suspend fun setMacroDepth(v: Int) { context.dataStore.edit { it[MACRO_DEPTH] = v } }
+    suspend fun setLevel(v: Int) { context.dataStore.edit { it[LEVEL] = v } }
+    suspend fun setKeyLocked(v: Boolean) { context.dataStore.edit { it[KEY_LOCKED] = if (v) "1" else "0" } }
 
     suspend fun nextBatch(): Int {
         var out = 1

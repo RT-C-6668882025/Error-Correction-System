@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import com.ecs.data.backup.BackupManager
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.BusyBar
+import com.ecs.ui.component.MessageBar
 import com.ecs.ui.component.SectionCard
 
 @Composable

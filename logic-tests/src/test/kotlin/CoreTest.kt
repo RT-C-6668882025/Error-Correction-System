@@ -3,7 +3,6 @@ import com.ecs.core.export.Exporter
 import com.ecs.core.model.*
 import com.ecs.core.parse.SlotSpec
 import com.ecs.core.report.ReportBuilder
-import com.ecs.core.rules.Dormancy
 import com.ecs.core.rules.StyleGuard
 import com.ecs.core.rules.Validation
 import com.ecs.core.tree.KaodianTree
@@ -36,9 +35,11 @@ private fun rec(
     answer: String? = "development",
     eye: String? = "空前有 the，空后接介词短语",
     difficulty: Difficulty? = Difficulty.MEDIUM,
+    stem: String? = "The ___ of AI has changed everything.",
 ) = ErrorRecord(
     id = id,
     src = Src(paper, section, no, slot, batch, total),
+    stem = stem,
     answer = answer,
     confidence = conf,
     createdAt = createdAt,
@@ -140,131 +141,85 @@ class ValidationTest {
 }
 
 class AggregatorTest {
-    @Test fun `only active and dormant records count`() {
-        val rs = listOf(
-            rec("gf_001_1"),
-            rec("gf_002_1", status = RecordStatus.DORMANT),
-            rec("gf_003_1", status = RecordStatus.PENDING_ANSWER, answer = null),
-            rec("gf_004_1", status = RecordStatus.INCOMPLETE),
-            rec("gf_005_1", status = RecordStatus.ARCHIVED),
+
+    private val tree4 = KaodianTree("v1", listOf(
+        TreeNode("词法/名词/后缀转换/-tion", "名词，动词加 -tion 后缀"),
+        TreeNode("词法/名词/后缀转换/-ment", "名词，动词加 -ment 后缀"),
+        TreeNode("词法/动词/时态形式/一般过去时", "动词过去式"),
+        TreeNode("句法/从句结构/定语从句/关系代词", "关系代词 which/that"),
+    ))
+
+    private val corpus = listOf(
+        rec("gf_001_1", kaodian = "词法/名词/后缀转换/-tion"),
+        rec("gf_002_1", no = 2, kaodian = "词法/名词/后缀转换/-ment", answer = "development"),
+        rec("gf_003_1", no = 3, kaodian = "词法/动词/时态形式/一般过去时"),
+        rec("gf_004_1", no = 4, kaodian = "句法/从句结构/定语从句/关系代词"),
+    ).map { it.copy(formRule = tree4.formRuleOf(it.kaodian!!)) }
+
+    @Test fun `unannotated records stay out of review`() {
+        val withDraft = corpus + rec("gf_009_1", no = 9, kaodian = null)
+        assertEquals(4, Aggregator.countable(withDraft).size)
+        assertEquals(4, Aggregator.groups(withDraft, tree4, Aggregator.Level.LEAF).size)
+    }
+
+    @Test fun `each level collapses further, bottom up`() {
+        fun n(l: Aggregator.Level) = Aggregator.groups(corpus, tree4, l).size
+        assertEquals(4, n(Aggregator.Level.LEAF))    // 四个末端
+        assertEquals(3, n(Aggregator.Level.THIRD))   // 两个 -tion/-ment 并进后缀转换
+        assertEquals(3, n(Aggregator.Level.SECOND))  // 名词 / 动词 / 从句结构
+        assertEquals(2, n(Aggregator.Level.ROOT))    // 词法 / 句法
+    }
+
+    @Test fun `an upper level takes the lower levels output as its input`() {
+        val leaves = Aggregator.groups(corpus, tree4, Aggregator.Level.LEAF)
+            .filter { it.kaodian.startsWith("词法/名词/后缀转换/") }
+        val parent = Aggregator.groups(corpus, tree4, Aggregator.Level.THIRD)
+            .first { it.kaodian == "词法/名词/后缀转换" }
+
+        // 上一层拿到的正是下一层各组交出的形态
+        assertEquals(
+            leaves.flatMap { it.formRules }.toSet(),
+            parent.formRules.toSet(),
         )
-        assertEquals(2, Aggregator.countable(rs).size)
-        assertEquals(2, Aggregator.maturity(rs).countedSlots)
+        assertEquals(2, parent.formRules.size)
     }
 
-    @Test fun `weighted count halves lucky guesses`() {
-        val rs = listOf(rec("gf_001_1"), rec("gf_002_1", conf = Confidence.LUCKY))
-        val stat = Aggregator.kaodianStats(rs, TREE, depth = 4).single()
-        assertEquals(2, stat.slots)
-        assertEquals(1, stat.wrong)
-        assertEquals(1, stat.lucky)
-        assertEquals(1.5, stat.weighted)
+    @Test fun `a group names the finer kaodian it was rolled up from`() {
+        val parent = Aggregator.groups(corpus, tree4, Aggregator.Level.ROOT)
+            .first { it.kaodian == "词法" }
+        assertEquals(3, parent.children.size)
+        assertTrue(parent.children.all { it.startsWith("词法/") })
+        assertEquals(3, parent.size)
     }
 
-    @Test fun `hit_papers counts distinct papers not repeats`() {
-        val sameCard = (1..5).map { rec("gf_00${it}_1", paper = "卷A", no = it) }
-        val spread = (1..3).map { rec("gf_00${it}_1", paper = "卷$it", no = it) }
-        assertEquals(1, Aggregator.kaodianStats(sameCard, TREE, 4).single().hitPapers)
-        assertEquals(3, Aggregator.kaodianStats(spread, TREE, 4).single().hitPapers)
+    @Test fun `a leaf group takes its form rule straight from the tree node`() {
+        val leaf = Aggregator.groups(corpus, tree4, Aggregator.Level.LEAF)
+            .first { it.kaodian == "词法/名词/后缀转换/-tion" }
+        assertEquals(listOf("名词，动词加 -tion 后缀"), leaf.formRules)
+        assertEquals("-tion", leaf.leafName)
+        assertEquals("词法", leaf.root)
     }
 
-    @Test fun `priority ordering prefers cross-paper over raw count`() {
-        val rs = (1..5).map { rec("gf_01${it}_1", paper = "卷A", no = it) } +
-            (1..2).map { rec("wc_02${it}_1", paper = "卷$it", no = 20 + it, section = Section.WC, kaodian = "句法/从句结构/定语从句/关系代词") }
-        val stats = Aggregator.kaodianStats(rs, TREE, 4)
-        assertEquals("句法/从句结构/定语从句/关系代词", stats.first().kaodian)
+    @Test fun `without a tree the form rules come off the records themselves`() {
+        val leaf = Aggregator.groups(corpus, null, Aggregator.Level.LEAF)
+            .first { it.kaodian == "词法/名词/后缀转换/-tion" }
+        assertEquals(listOf("名词，动词加 -tion 后缀"), leaf.formRules)
     }
 
-    @Test fun `truncation collapses to the requested depth`() {
-        assertEquals("词法/名词/后缀转换", truncate("词法/名词/后缀转换/-tion", 3))
-        assertEquals("词法", truncate("词法/名词/后缀转换/-tion", 1))
-        val rs = listOf(rec("gf_001_1"), rec("gf_002_1", kaodian = "词法/动词/时态形式/一般过去时"))
-        assertEquals(1, Aggregator.kaodianStats(rs, TREE, 1).size)
-        assertEquals(2, Aggregator.kaodianStats(rs, TREE, 2).size)
+    @Test fun `rows carry what you need to answer, and nothing else`() {
+        val leaf = Aggregator.groups(corpus, tree4, Aggregator.Level.LEAF)
+            .first { it.kaodian == "词法/名词/后缀转换/-ment" }
+        val row = leaf.rows.single()
+        assertEquals("空前有 the，空后接介词短语", row.eye)
+        assertEquals("development", row.answer)
+        assertEquals("The ___ of AI has changed everything.", row.stem)
     }
 
-    @Test fun `papers without total_in_section leave both numerator and denominator`() {
-        val rs = listOf(
-            rec("gf_001_1", paper = "卷A", total = 10),
-            rec("gf_002_1", paper = "卷A", total = 10, no = 2),
-            rec("gf_003_1", paper = "卷B", total = null, no = 3),
-        )
-        val gf = Aggregator.sectionRates(rs).first { it.section == Section.GF }
-        assertEquals(10, gf.totalSlots)
-        assertEquals(2.0, gf.weightedWrong)
-        assertEquals(0.2, gf.rate)
-        assertEquals(1, gf.papersSkipped)
-        assertEquals(4.0, gf.weightedLoss)
-    }
-
-    @Test fun `missing denominator yields null rate not zero`() {
-        val gf = Aggregator.sectionRates(listOf(rec("gf_001_1", total = null)))
-            .first { it.section == Section.GF }
-        assertNull(gf.rate)
-        assertNull(gf.weightedLoss)
-    }
-
-    @Test fun `weighted loss scales to section full score`() {
-        val wc = Aggregator.sectionRates(
-            listOf(rec("wc_001_1", section = Section.WC, total = 9, kaodian = "句法/从句结构/定语从句/关系代词"))
-        ).first { it.section == Section.WC }
-        assertEquals(18, wc.section.fullScore)
-        assertEquals(2.0, wc.weightedLoss)
-    }
-
-    @Test fun `same question different slots is a strong correlation`() {
-        val rs = (1..3).flatMap { p ->
-            listOf(
-                rec("wc_012_1", paper = "卷$p", section = Section.WC, no = 12, slot = 1),
-                rec("wc_012_2", paper = "卷$p", section = Section.WC, no = 12, slot = 2, kaodian = "词法/动词/时态形式/一般过去时"),
-            )
-        }
-        val c = Aggregator.correlations(rs, depth = 4).single()
-        assertEquals(3, c.strong)
-        assertEquals(0, c.weak)
-    }
-
-    @Test fun `correlations below three occurrences are dropped`() {
-        val rs = listOf(
-            rec("wc_012_1", section = Section.WC, no = 12, slot = 1),
-            rec("wc_012_2", section = Section.WC, no = 12, slot = 2, kaodian = "词法/动词/时态形式/一般过去时"),
-        )
-        assertTrue(Aggregator.correlations(rs, depth = 4).isEmpty())
-    }
-
-    @Test fun `maturity gates report entry points`() {
-        fun mk(n: Int) = (1..n).map { rec("gf_%03d_1".format(it), no = it) }
-        Aggregator.maturity(mk(10)).let {
-            assertFalse(it.microEnabled); assertFalse(it.macroEnabled)
-            assertTrue(it.hint.contains("40"))
-        }
-        Aggregator.maturity(mk(60)).let {
-            assertTrue(it.microEnabled); assertTrue(it.macroEnabled); assertTrue(it.macroCaveat)
-        }
-        Aggregator.maturity(mk(250)).let {
-            assertTrue(it.macroEnabled); assertFalse(it.macroCaveat)
-        }
-    }
-
-    @Test fun `consistency alarm below 85 percent`() {
-        val ok = (1..9).map { rec("gf_00${it}_1", no = it).copy(verified = Verified.CONSISTENT) }
-        val bad = listOf(rec("gf_010_1", no = 10).copy(verified = Verified.CONFLICT))
-        assertFalse(Aggregator.consistency(ok + bad).alarm)
-        val worse = (1..3).map { rec("gf_10${it}_1", no = it).copy(verified = Verified.CONFLICT) }
-        assertTrue(Aggregator.consistency(ok.take(5) + worse).alarm)
-        assertNull(Aggregator.consistency(ok.map { it.copy(verified = Verified.UNCHECKED) }).rate)
-    }
-
-    @Test fun `round similarity flags an exhausted source`() {
-        val b1 = (1..5).map { rec("gf_00${it}_1", no = it, batch = "b01") }
-        val b2 = (1..5).map { rec("gf_01${it}_1", paper = "卷B", no = 10 + it, batch = "b02") }
-        assertTrue(Aggregator.termination(b1 + b2, TREE, 4).sourceExhausted)
-    }
-
-    @Test fun `coverage counts live tree nodes only`() {
-        val t = Aggregator.termination(listOf(rec("gf_001_1")), TREE, 4)
-        assertEquals(3, TREE.liveNodes.size)
-        assertEquals(1.0 / 3, t.coverage, 1e-9)
+    @Test fun `levels map to depths and survive a bogus value`() {
+        assertEquals(4, Aggregator.Level.LEAF.depth)
+        assertEquals(1, Aggregator.Level.ROOT.depth)
+        assertEquals(Aggregator.Level.THIRD, Aggregator.Level.ofDepth(3))
+        assertEquals(Aggregator.Level.DEFAULT, Aggregator.Level.ofDepth(99))
     }
 }
 
@@ -295,31 +250,6 @@ class TreeTest {
     }
 }
 
-class DormancyTest {
-    private val now = 1_700_000_000_000
-
-    @Test fun `thirty idle days puts a kaodian to sleep`() {
-        val old = rec("gf_001_1", createdAt = now - 31 * Dormancy.DAY)
-        val t = Dormancy.evaluate(listOf(old), now).single()
-        assertEquals(RecordStatus.DORMANT, t.to)
-        assertEquals(now + 14 * Dormancy.DAY, t.nextCheck)
-    }
-
-    @Test fun `a new record wakes the whole kaodian back up`() {
-        val old = rec("gf_001_1", createdAt = now - 60 * Dormancy.DAY, status = RecordStatus.DORMANT)
-            .copy(nextCheck = now - Dormancy.DAY)
-        val fresh = rec("gf_002_1", no = 2, createdAt = now)
-        val ts = Dormancy.evaluate(listOf(old, fresh), now)
-        assertEquals(RecordStatus.ACTIVE, ts.single().to)
-    }
-
-    @Test fun `dormant past next_check archives`() {
-        val old = rec("gf_001_1", createdAt = now - 60 * Dormancy.DAY, status = RecordStatus.DORMANT)
-            .copy(nextCheck = now - Dormancy.DAY)
-        assertEquals(RecordStatus.ARCHIVED, Dormancy.evaluate(listOf(old), now).single().to)
-    }
-}
-
 class StyleGuardTest {
     @Test fun `banned phrases and question numbers are detected`() {
         val bad = "综上所述，本报告认为 gf_034_1 需要加强学习。"
@@ -335,85 +265,70 @@ class StyleGuardTest {
 }
 
 class ReportTest {
-    private val corpus = listOf(
-        rec("gf_001_1", paper = "卷A", no = 1),
-        rec("gf_002_1", paper = "卷B", no = 2, conf = Confidence.LUCKY),
-        rec("wc_012_1", paper = "卷B", section = Section.WC, no = 12, slot = 1, total = 9,
-            kaodian = "句法/从句结构/定语从句/关系代词", answer = "which"),
-    )
+    private val tree = KaodianTree("v1", listOf(
+        TreeNode("词法/名词/后缀转换/-tion", "名词，动词加 -tion 后缀"),
+    ))
+    private val group = Aggregator.groups(
+        listOf(rec("gf_001_1").copy(formRule = "名词，动词加 -tion 后缀")),
+        tree,
+        Aggregator.Level.LEAF,
+    ).single()
 
-    @Test fun `micro report carries the numbers and no question numbers`() {
-        val stat = Aggregator.kaodianStats(corpus, TREE, 4)
-            .first { it.kaodian == "词法/名词/后缀转换/-tion" }
-        val md = ReportBuilder.micro(stat)
-        assertTrue(md.contains("**空数** 2（错1 / 蒙对1）"))
-        assertTrue(md.contains("**加权计数** 1.5"))
-        assertTrue(md.contains("**跨卷次数** 2"))
+    @Test fun `the review card leads with the answer form`() {
+        val md = ReportBuilder.render(group)
+        assertTrue(md.contains("**答案形式**"))
         assertTrue(md.contains("名词，动词加 -tion 后缀"))
+        assertTrue(md.contains("| 题眼 | 语境限定 | 答案 |"))
         assertTrue(StyleGuard.violations(md).isEmpty())
     }
 
-    @Test fun `macro report has every required section`() {
-        val md = ReportBuilder.macro(corpus, TREE, 2)
-        listOf("# 全局分析", "## 薄弱格局", "## 反复出错", "## 跨考点关联",
-            "## 优先级排序", "## 暂时不用管", "## 一句话结论").forEach {
-            assertTrue(md.contains(it), "missing $it")
+    @Test fun `no statistics leak into the card`() {
+        val md = ReportBuilder.render(group)
+        listOf("加权", "跨卷", "错误率", "难度", "空数").forEach {
+            assertFalse(md.contains(it), "还在写统计：$it")
         }
-        assertTrue(StyleGuard.violations(md).isEmpty())
     }
 
-    @Test fun `facts block never leaks question ids`() {
-        val facts = ReportBuilder.macroFacts(corpus, TREE, 2)
-        assertFalse(facts.contains("gf_001_1"))
+    @Test fun `the facts block never leaks question ids`() {
+        assertFalse(ReportBuilder.facts(group).contains("gf_001_1"))
     }
 }
 
 class ExporterTest {
-    private val corpus = (1..40).map {
-        rec(
-            "gf_%03d_1".format(it), paper = "卷${it % 5}", no = it,
-            kaodian = if (it % 2 == 0) "词法/名词/后缀转换/-tion" else "词法/动词/时态形式/一般过去时",
-        )
-    } + listOf(
-        rec("gf_900_1", status = RecordStatus.INCOMPLETE, no = 900),
-        rec("gf_901_1", status = RecordStatus.PENDING_ANSWER, answer = null, no = 901),
-    )
+    private val tree = KaodianTree("v1", listOf(
+        TreeNode("词法/名词/后缀转换/-tion", "名词，动词加 -tion 后缀"),
+    ))
+    private val corpus = (1..40).map { rec("gf_%03d_1".format(it), no = it) }
 
     @Test fun `readme stays within 120 lines`() {
-        val pkg = Exporter.build(corpus, TREE, "20260828")
+        val pkg = Exporter.build(corpus, tree, "20260828")
         assertTrue(pkg.readme.lines().size <= Exporter.README_MAX_LINES,
             "readme is ${pkg.readme.lines().size} lines")
         assertTrue(pkg.readme.contains("词法/名词/后缀转换/-tion"))
-        assertTrue(pkg.readme.contains("hit_papers"))
+        assertTrue(pkg.readme.contains("自下而上的递归聚合"))
     }
 
-    @Test fun `readme stays within the cap even with a large node set`() {
-        val many = (1..200).map {
-            rec("gf_%03d_1".format(it % 999), no = it, kaodian = "词法/名词/后缀转换/n$it")
-        }
-        val md = Exporter.readme(many, null)
-        assertTrue(md.lines().size <= Exporter.README_MAX_LINES, "readme is ${md.lines().size} lines")
-        assertTrue(md.contains("另有"))
+    @Test fun `readme documents the stem field now that we store it`() {
+        val md = Exporter.readme(corpus, tree)
+        assertTrue(md.contains("`stem`"))
+        assertFalse(md.contains("不含原题"))
     }
 
-    @Test fun `export excludes records that do not count`() {
-        val pkg = Exporter.build(corpus, TREE, "20260828")
-        assertFalse(pkg.dataJson.contains("gf_900_1"))
-        assertFalse(pkg.dataJson.contains("gf_901_1"))
-        assertEquals(40 + 1, pkg.dataCsv.trim().lines().size)
-        assertEquals("export_20260828", pkg.dirName)
+    @Test fun `the stem survives json and csv`() {
+        val pkg = Exporter.build(corpus.take(1), tree, "20260828")
+        assertTrue(pkg.dataJson.contains("The ___ of AI has changed everything."))
+        assertTrue(pkg.dataCsv.lines().first().contains("stem"))
+        assertTrue(pkg.dataCsv.contains("The ___ of AI has changed everything."))
+    }
+
+    @Test fun `everything is exported now that there is no statistics gate`() {
+        val withDraft = corpus + rec("gf_900_1", no = 900, kaodian = null)
+        assertEquals(41, Exporter.validRecords(withDraft).size)
     }
 
     @Test fun `csv escapes commas`() {
         val r = rec("gf_001_1").copy(note = "a,b \"q\"")
         val line = Exporter.csv(listOf(r)).lines()[1]
         assertTrue(line.endsWith("\"a,b \"\"q\"\"\""))
-    }
-
-    @Test fun `reverse table groups by kaodian and keeps the three columns`() {
-        val t = Exporter.reverseTable(Exporter.validRecords(corpus))
-        assertTrue(t.contains("## 词法/名词/后缀转换/-tion"))
-        assertTrue(t.contains("| eye | form_context | answer |"))
-        assertTrue(t.contains("规则形态：名词，动词加 -tion 后缀"))
     }
 }

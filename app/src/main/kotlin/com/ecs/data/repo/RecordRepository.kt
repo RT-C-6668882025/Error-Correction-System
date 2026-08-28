@@ -5,11 +5,8 @@ import com.ecs.core.model.ErrorRecord
 import com.ecs.core.model.RecordStatus
 import com.ecs.core.model.Section
 import com.ecs.core.model.Src
-import com.ecs.core.model.Verified
 import com.ecs.core.parse.SlotSpec
-import com.ecs.core.rules.Dormancy
 import com.ecs.core.rules.Validation
-import com.ecs.core.tree.KaodianTree
 import com.ecs.data.backup.BackupManager
 import com.ecs.data.db.AppDatabase
 import com.ecs.data.db.RecordDao
@@ -48,7 +45,7 @@ class RecordRepository(
         totalInSection: Int? = null,
         srcRef: String? = null,
         now: Long = System.currentTimeMillis(),
-        /** 识别流程带来的 given / answer，键是 (题号, 空序)。极简录入传空。 */
+        /** 识别流程带来的题干 / 提示词 / 答案，键是 (题号, 空序)。 */
         details: Map<Pair<Int, Int>, Detail> = emptyMap(),
     ): QuickAddResult {
         val parsed = SlotSpec.parse(spec, section)
@@ -60,6 +57,7 @@ class RecordRepository(
                 id = e.id(section),
                 src = Src(paper, section, e.no, e.slot, batch, totalInSection),
                 srcRef = srcRef,
+                stem = details[e.no to e.slot]?.stem,
                 given = details[e.no to e.slot]?.given,
                 answer = details[e.no to e.slot]?.answer,
                 confidence = e.confidence,
@@ -78,7 +76,7 @@ class RecordRepository(
         )
     }
 
-    data class Detail(val given: String?, val answer: String?)
+    data class Detail(val stem: String?, val given: String?, val answer: String?)
 
     data class QuickAddResult(
         val records: List<ErrorRecord>,
@@ -116,48 +114,7 @@ class RecordRepository(
         saveAnnotation(current.copy(answer = answer))
     }
 
-    suspend fun setVerified(uid: String, verified: Verified) = dao.setVerified(uid, verified.label)
-
     suspend fun delete(uid: String) = dao.delete(uid)
-
-    /** 4.4 休眠扫描。 */
-    suspend fun sweepDormancy(now: Long = System.currentTimeMillis()): Int {
-        val transitions = Dormancy.evaluate(snapshot(), now)
-        transitions.forEach { dao.setStatus(it.uid, it.to.label, it.nextCheck) }
-        return transitions.size
-    }
-
-    // ---------- 树版本重映射 ----------
-
-    suspend fun staleRecords(version: String): List<ErrorRecord> =
-        dao.staleTreeVersion(version).map { it.toModel() }
-
-    /**
-     * 树改版后把旧记录搬到新节点；目标节点不存在的记录退回「不完整」等待重标。
-     */
-    suspend fun remap(tree: KaodianTree): RemapResult {
-        val stale = staleRecords(tree.version)
-        var moved = 0
-        var orphaned = 0
-        stale.forEach { r ->
-            val target = r.kaodian?.let { tree.resolve(it) }
-            if (target != null) {
-                val rule = tree.formRuleOf(target) ?: r.formRule
-                dao.update(
-                    r.copy(kaodian = target, formRule = rule, treeVersion = tree.version).toEntity()
-                )
-                moved++
-            } else {
-                dao.update(
-                    r.copy(status = RecordStatus.INCOMPLETE, treeVersion = tree.version).toEntity()
-                )
-                orphaned++
-            }
-        }
-        return RemapResult(moved, orphaned)
-    }
-
-    data class RemapResult(val moved: Int, val orphaned: Int)
 
     // ---------- 导出与备份 ----------
 

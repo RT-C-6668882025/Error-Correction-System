@@ -113,6 +113,8 @@ object BuiltInEndpoints {
     const val ZHIPU = "zhipu"
     const val MOONSHOT = "moonshot"
     const val MINIMAX = "minimax"
+    const val DEEPSEEK = "deepseek"
+    const val LOCAL = "local"
 
     val ALL: List<ApiEndpoint> = listOf(
         ApiEndpoint(
@@ -138,6 +140,22 @@ object BuiltInEndpoints {
             protocol = Protocol.OPENAI,
             builtIn = true,
             note = "platform.moonshot.cn，地址若有变动可直接改",
+        ),
+        ApiEndpoint(
+            id = DEEPSEEK,
+            name = "DeepSeek",
+            baseUrl = "https://api.deepseek.com/v1",
+            protocol = Protocol.OPENAI,
+            builtIn = true,
+            note = "platform.deepseek.com，模型 deepseek-chat / deepseek-reasoner",
+        ),
+        ApiEndpoint(
+            id = LOCAL,
+            name = "本地 / 局域网",
+            baseUrl = "http://192.168.1.100:11434/v1",
+            protocol = Protocol.OPENAI,
+            builtIn = true,
+            note = "电脑上用 Ollama 跑 GLM-OCR 之类的模型，手机填局域网地址，外网断了也能用",
         ),
         ApiEndpoint(
             id = MINIMAX,

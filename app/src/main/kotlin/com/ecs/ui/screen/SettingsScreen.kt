@@ -37,8 +37,10 @@ import com.ecs.core.model.ModelCatalog
 import com.ecs.core.model.Protocol
 import com.ecs.core.model.activeEndpoints
 import com.ecs.ui.AppViewModel
+import com.ecs.ui.component.ApiKeyField
 import com.ecs.ui.component.Badge
 import com.ecs.ui.component.BusyBar
+import com.ecs.ui.component.MessageBar
 import com.ecs.ui.component.SectionCard
 import com.ecs.ui.nav.Routes
 
@@ -63,7 +65,7 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
         val active = activeEndpoints(endpoints, visionEndpoint, textEndpoint)
         SectionCard("API Key") {
             Text(
-                "识别、标注、报告生成都要联网。下面两项是当前两档在用的端点，填完就能用。",
+                "识别、标注、复习判断都要联网。下面是当前两档在用的端点，填完就能用。",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),
             )
@@ -127,7 +129,7 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
 
         SectionCard("文本模型（判断用）") {
             Text(
-                "考点树生成、标注、抽检、报告叙述走这个模型。标注质量直接决定聚合是否可信，" +
+                "考点树生成、标注、复习判断走这个模型。标注质量直接决定复习页对不对，" +
                     "这一档不建议为省钱降配。",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),
@@ -291,58 +293,6 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
             onDismiss = { editing = null },
             onSave = { vm.saveEndpoint(it); editing = null },
         )
-    }
-}
-
-/**
- * Key 输入框。顶部卡片与端点列表共用同一个组件，写回同一个 [vm.saveEndpoint]，
- * 所以两处显示的永远是同一份数据，改一处另一处跟着变。
- *
- * 缺 Key 时默认展开——那是必须马上填的东西；已填的收起，免得一屏全是密码框。
- */
-@Composable
-private fun ApiKeyField(endpoint: ApiEndpoint, onSave: (ApiEndpoint) -> Unit) {
-    var expanded by remember(endpoint.id, endpoint.configured) {
-        mutableStateOf(endpoint.apiKey.isBlank())
-    }
-    var key by remember(endpoint.id, endpoint.apiKey) { mutableStateOf(endpoint.apiKey) }
-
-    if (!expanded) {
-        Row(
-            Modifier.padding(top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Key 已配置",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.secondary,
-            )
-            TextButton(onClick = { expanded = true }) { Text("修改") }
-        }
-        return
-    }
-
-    OutlinedTextField(
-        value = key,
-        onValueChange = { key = it },
-        label = { Text("API Key") },
-        singleLine = true,
-        isError = endpoint.apiKey.isBlank() && key.isBlank(),
-        visualTransformation = PasswordVisualTransformation(),
-        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-    )
-    Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(
-            onClick = {
-                onSave(endpoint.copy(apiKey = key.trim()))
-                expanded = false
-            },
-            enabled = key.trim() != endpoint.apiKey,
-        ) { Text("保存") }
-        if (endpoint.apiKey.isNotBlank()) {
-            TextButton(onClick = { key = endpoint.apiKey; expanded = false }) { Text("取消") }
-        }
     }
 }
 

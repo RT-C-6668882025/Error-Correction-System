@@ -1,7 +1,7 @@
 package com.ecs.core.model
 
 /**
- * 模型建议清单。分文本与视觉两档：识别走视觉模型，标注/抽检/报告/树维护走文本模型。
+ * 模型建议清单。分文本与视觉两档：识别走视觉模型，标注与复习判断走文本模型。
  *
  * 这里只是「常用值」，真正生效的是「端点 + 模型 ID」两段自由输入——
  * 厂商换 ID、换域名、上新模型，都不需要重新发版。
@@ -39,9 +39,15 @@ object ModelCatalog {
         ModelSpec("kimi-k2-turbo-preview", "Kimi K2 Turbo", BuiltInEndpoints.MOONSHOT, vision = false),
         ModelSpec("moonshot-v1-8k-vision-preview", "Kimi 视觉", BuiltInEndpoints.MOONSHOT, vision = true),
         ModelSpec("MiniMax-Text-01", "MiniMax Text 01", BuiltInEndpoints.MINIMAX, vision = false),
+        ModelSpec("deepseek-chat", "DeepSeek Chat", BuiltInEndpoints.DEEPSEEK, vision = false, note = "V3 系"),
+        ModelSpec(
+            "deepseek-reasoner", "DeepSeek Reasoner", BuiltInEndpoints.DEEPSEEK,
+            vision = false, note = "推理型",
+        ),
+        ModelSpec("glm-ocr", "GLM-OCR", BuiltInEndpoints.ZHIPU, vision = true, note = "专做识别，0.9B"),
     )
 
-    /** 标注、抽检、报告、树生成与维护都吃这个。 */
+    /** 标注、复习判断、考点树生成都吃这个。 */
     const val DEFAULT_TEXT = "claude-opus-5"
 
     /** 识别吃这个。默认挑免费的：录入频率是系统生命线，识别不该按次心疼。 */

@@ -17,7 +17,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -28,22 +27,22 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.ecs.agent.AgentClient
 import com.ecs.core.model.Section
-import com.ecs.core.parse.SlotSpec
+import com.ecs.core.model.activeEndpoints
 import com.ecs.ui.AppViewModel
+import com.ecs.ui.component.ApiKeyField
+import com.ecs.ui.component.Badge
 import com.ecs.ui.component.BusyBar
+import com.ecs.ui.component.MessageBar
 import com.ecs.ui.component.SectionCard
 import com.ecs.ui.nav.Routes
 
-/**
- * F1.2 极简录入是默认入口，完整录入是次级选项。
- * 备考最忙的时候恰恰是最不想多操作的时候。
- */
 @Composable
 fun EntryScreen(vm: AppViewModel, nav: NavHostController) {
     var tab by remember { mutableIntStateOf(0) }
@@ -51,84 +50,65 @@ fun EntryScreen(vm: AppViewModel, nav: NavHostController) {
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         BusyBar(busy)
+        KeyBar(vm)
         TabRow(selectedTabIndex = tab) {
-            listOf("极简", "拍照识别", "导入").forEachIndexed { i, label ->
+            listOf("拍照", "导入").forEachIndexed { i, label ->
                 Tab(selected = tab == i, onClick = { tab = i }, text = { Text(label) })
             }
         }
-        when (tab) {
-            0 -> QuickEntry(vm)
-            1 -> ScanEntry(vm, nav)
-            else -> ImportEntry(vm)
-        }
+        if (tab == 0) ScanEntry(vm, nav) else ImportEntry(vm)
         MessageBar(vm)
     }
 }
 
+/**
+ * 录入页顶部的 Key 区。缺 Key 时展开标红，当场能填；填好缩成一行。
+ * 一次性配置不该长期霸占你天天要用的页面，所以配好之后它只剩一行。
+ */
 @Composable
-private fun QuickEntry(vm: AppViewModel) {
-    var paper by remember { mutableStateOf("") }
-    var spec by remember { mutableStateOf("") }
-    var total by remember { mutableStateOf("") }
-    var section by remember { mutableStateOf(Section.GF) }
+private fun KeyBar(vm: AppViewModel) {
+    val endpoints by vm.endpoints.collectAsState()
+    val visionEndpoint by vm.visionEndpoint.collectAsState()
+    val textEndpoint by vm.textEndpoint.collectAsState()
+    val locked by vm.keyLocked.collectAsState()
 
-    val parsed = remember(spec, section) { SlotSpec.parse(spec, section) }
+    val active = activeEndpoints(endpoints, visionEndpoint, textEndpoint)
+    val missing = active.filterNot { it.configured }
+    val allReady = active.isNotEmpty() && missing.isEmpty()
 
-    SectionCard("三秒录入") {
-        OutlinedTextField(
-            value = paper,
-            onValueChange = { paper = it },
-            label = { Text("卷名") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
-        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Section.entries.forEach { s ->
-                FilterChip(
-                    selected = section == s,
-                    onClick = { section = s },
-                    label = { Text(s.label) },
+    SectionCard(if (allReady) "API" else "还不能识别：先填 API Key") {
+        if (!allReady) {
+            Text(
+                "拍照识别要联网。下面是当前在用的端点，填完就能拍。",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        // 已经配好的只显示一行摘要，没配好的展开让你当场填
+        (if (allReady) active else missing).forEach { slot ->
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(slot.endpoint.name, style = MaterialTheme.typography.titleSmall)
+                Badge(slot.label, MaterialTheme.colorScheme.primary)
+                if (!slot.configured) Badge("待填", MaterialTheme.colorScheme.error)
+            }
+            if (slot.endpoint.note.isNotBlank() && !slot.configured) {
+                Text(
+                    slot.endpoint.note,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
                 )
             }
+            ApiKeyField(
+                endpoint = slot.endpoint,
+                onSave = vm::saveEndpoint,
+                locked = locked,
+                onLockChange = vm::setKeyLocked,
+            )
         }
-        OutlinedTextField(
-            value = spec,
-            onValueChange = { spec = it },
-            label = { Text(if (section == Section.GF) "错题号　如 3, ?5, 7" else "错题号　如 12-1, ?15-2") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
-        Text(
-            parsed.preview,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (parsed.ok) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(top = 4.dp),
-        )
-        Text(
-            "? 前缀表示蒙对，按 0.5 权重计入",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.secondary,
-        )
-        OutlinedTextField(
-            value = total,
-            onValueChange = { total = it.filter { c -> c.isDigit() } },
-            label = { Text("该卷该题型总空数（可后补，缺则不算错误率）") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
-        Button(
-            onClick = {
-                vm.quickAdd(paper.trim(), section, spec, total.toIntOrNull())
-                spec = ""
-            },
-            enabled = paper.isNotBlank() && parsed.entries.isNotEmpty(),
-            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-        ) { Text("提交") }
-        Text(
-            "其余字段留空，状态记为「不完整」，空闲时在列表页的待完善入口批量补标注。",
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(top = 6.dp),
-        )
     }
 }
 
@@ -142,10 +122,10 @@ private fun ScanEntry(vm: AppViewModel, nav: NavHostController) {
         ActivityResultContracts.PickMultipleVisualMedia(5)
     ) { uris -> picked = uris }
 
-    SectionCard("识别题号 / 题干 / 括号提示词 / 空位") {
+    SectionCard("拍照录入") {
         Text(
-            "只识别印刷体。手写作答不识别——识别错会连带污染题眼和后续全部分析，" +
-                "作答由你直接输入错题号。",
+            "识别题号、题干、括号提示词与选项版式。只识别印刷体——手写作答不识别，" +
+                "识别错会连带污染后续全部标注，作答由你直接输入错题号。",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(top = 6.dp),
         )
@@ -198,7 +178,7 @@ private fun ImportEntry(vm: AppViewModel) {
 
     SectionCard("批量导入") {
         Text(
-            "与导出包 data.json / data.csv 同结构。校验走录入同一条路径：缺字段照样收，只是状态不同。",
+            "与导出包 data.json / data.csv 同结构，含题干。",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(top = 6.dp),
         )

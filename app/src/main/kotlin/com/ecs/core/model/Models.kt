@@ -91,6 +91,8 @@ data class ErrorRecord(
     val id: String,
     val src: Src,
     val srcRef: String? = null,
+    /** 题干全文。原题是一切数据的来源，识别错了要能改回来。 */
+    val stem: String? = null,
     val given: String? = null,
     val answer: String? = null,
     val confidence: Confidence,
