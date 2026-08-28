@@ -3,6 +3,9 @@ import com.ecs.core.model.ApiEndpoint
 import com.ecs.core.model.BuiltInEndpoints
 import com.ecs.core.model.ModelCatalog
 import com.ecs.core.model.Protocol
+import com.ecs.core.model.ROLE_TEXT
+import com.ecs.core.model.ROLE_VISION
+import com.ecs.core.model.activeEndpoints
 import com.ecs.core.model.normalizeUrl
 import com.ecs.core.prompt.PromptSlot
 import com.ecs.core.rules.Validation
@@ -146,6 +149,61 @@ class EndpointTest {
     @Test fun `defaults point at real presets`() {
         assertNotNull(BuiltInEndpoints.byId(ModelCatalog.DEFAULT_TEXT_ENDPOINT))
         assertNotNull(BuiltInEndpoints.byId(ModelCatalog.DEFAULT_VISION_ENDPOINT))
+    }
+}
+
+class ActiveEndpointsTest {
+
+    private val zhipu = BuiltInEndpoints.byId("zhipu")!!.copy(apiKey = "k1")
+    private val anthropic = BuiltInEndpoints.byId("anthropic")!!
+    private val all = listOf(zhipu, anthropic)
+
+    @Test fun `two slots on different endpoints, vision first`() {
+        val active = activeEndpoints(all, visionId = "zhipu", textId = "anthropic")
+        assertEquals(listOf("zhipu", "anthropic"), active.map { it.endpoint.id })
+        assertEquals(listOf(ROLE_VISION), active[0].roles)
+        assertEquals(listOf(ROLE_TEXT), active[1].roles)
+    }
+
+    @Test fun `one endpoint serving both slots collapses into a single row`() {
+        val active = activeEndpoints(all, visionId = "zhipu", textId = "zhipu")
+        assertEquals(1, active.size)
+        assertEquals(listOf(ROLE_VISION, ROLE_TEXT), active.single().roles)
+        assertEquals("视觉 / 文本", active.single().label)
+    }
+
+    @Test fun `a selection pointing at a deleted endpoint is skipped, not crashed on`() {
+        val active = activeEndpoints(all, visionId = "gone", textId = "anthropic")
+        assertEquals(listOf("anthropic"), active.map { it.endpoint.id })
+        assertTrue(activeEndpoints(all, "gone", "also-gone").isEmpty())
+        assertTrue(activeEndpoints(emptyList(), "zhipu", "anthropic").isEmpty())
+    }
+
+    @Test fun `configured tracks the underlying key`() {
+        val active = activeEndpoints(all, visionId = "zhipu", textId = "anthropic")
+        assertTrue(active.first { it.endpoint.id == "zhipu" }.configured)
+        assertFalse(active.first { it.endpoint.id == "anthropic" }.configured)
+    }
+
+    @Test fun `filling a key flips the slot to configured`() {
+        val before = activeEndpoints(all, "anthropic", "anthropic").single()
+        assertFalse(before.configured)
+        val after = activeEndpoints(
+            listOf(zhipu, anthropic.copy(apiKey = "k2")), "anthropic", "anthropic",
+        ).single()
+        assertTrue(after.configured)
+    }
+
+    @Test fun `the defaults ship unconfigured so the prompt actually fires`() {
+        // 预置项默认没有 Key——首页与设置页的「还没填」提示要靠这一点
+        assertTrue(BuiltInEndpoints.ALL.none { it.configured })
+        val active = activeEndpoints(
+            BuiltInEndpoints.ALL,
+            ModelCatalog.DEFAULT_VISION_ENDPOINT,
+            ModelCatalog.DEFAULT_TEXT_ENDPOINT,
+        )
+        assertEquals(2, active.size)
+        assertTrue(active.all { !it.configured })
     }
 }
 

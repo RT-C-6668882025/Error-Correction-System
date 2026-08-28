@@ -35,6 +35,7 @@ import androidx.navigation.NavHostController
 import com.ecs.core.model.ApiEndpoint
 import com.ecs.core.model.ModelCatalog
 import com.ecs.core.model.Protocol
+import com.ecs.core.model.activeEndpoints
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.Badge
 import com.ecs.ui.component.BusyBar
@@ -57,6 +58,52 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         BusyBar(busy)
+
+        // 填 Key 是首次使用的第一步，放在最上面
+        val active = activeEndpoints(endpoints, visionEndpoint, textEndpoint)
+        SectionCard("API Key") {
+            Text(
+                "识别、标注、报告生成都要联网。下面两项是当前两档在用的端点，填完就能用。",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            if (active.isEmpty()) {
+                Text(
+                    "两档选中的端点都不在列表里，先到下方「API 端点」里选一个。",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+            active.forEach { slot ->
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(slot.endpoint.name, style = MaterialTheme.typography.titleSmall)
+                    Badge(slot.label, MaterialTheme.colorScheme.primary)
+                    if (!slot.configured) Badge("待填", MaterialTheme.colorScheme.error)
+                }
+                if (slot.endpoint.note.isNotBlank()) {
+                    Text(
+                        slot.endpoint.note,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                }
+                ApiKeyField(endpoint = slot.endpoint, onSave = vm::saveEndpoint)
+            }
+            if (active.isNotEmpty() && active.all { it.configured }) {
+                Text(
+                    "两档均已配置",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        }
 
         SectionCard("视觉模型（识别用）") {
             Text(
@@ -126,8 +173,9 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
                     Text(ep.note, style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.secondary)
                 }
+                ApiKeyField(endpoint = ep, onSave = vm::saveEndpoint)
                 Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { editing = ep }) { Text("编辑") }
+                    OutlinedButton(onClick = { editing = ep }) { Text("改地址 / 协议") }
                     if (!ep.builtIn) {
                         TextButton(onClick = { vm.deleteEndpoint(ep.id) }) { Text("删除") }
                     }
@@ -243,6 +291,58 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
             onDismiss = { editing = null },
             onSave = { vm.saveEndpoint(it); editing = null },
         )
+    }
+}
+
+/**
+ * Key 输入框。顶部卡片与端点列表共用同一个组件，写回同一个 [vm.saveEndpoint]，
+ * 所以两处显示的永远是同一份数据，改一处另一处跟着变。
+ *
+ * 缺 Key 时默认展开——那是必须马上填的东西；已填的收起，免得一屏全是密码框。
+ */
+@Composable
+private fun ApiKeyField(endpoint: ApiEndpoint, onSave: (ApiEndpoint) -> Unit) {
+    var expanded by remember(endpoint.id, endpoint.configured) {
+        mutableStateOf(endpoint.apiKey.isBlank())
+    }
+    var key by remember(endpoint.id, endpoint.apiKey) { mutableStateOf(endpoint.apiKey) }
+
+    if (!expanded) {
+        Row(
+            Modifier.padding(top = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Key 已配置",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.secondary,
+            )
+            TextButton(onClick = { expanded = true }) { Text("修改") }
+        }
+        return
+    }
+
+    OutlinedTextField(
+        value = key,
+        onValueChange = { key = it },
+        label = { Text("API Key") },
+        singleLine = true,
+        isError = endpoint.apiKey.isBlank() && key.isBlank(),
+        visualTransformation = PasswordVisualTransformation(),
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+    )
+    Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            onClick = {
+                onSave(endpoint.copy(apiKey = key.trim()))
+                expanded = false
+            },
+            enabled = key.trim() != endpoint.apiKey,
+        ) { Text("保存") }
+        if (endpoint.apiKey.isNotBlank()) {
+            TextButton(onClick = { key = endpoint.apiKey; expanded = false }) { Text("取消") }
+        }
     }
 }
 

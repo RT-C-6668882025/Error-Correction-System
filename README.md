@@ -128,6 +128,10 @@ https://open.bigmodel.cn/api/paas/v4 → …/v4/chat/completions
 https://relay.com/v1  (Anthropic) → https://relay.com/v1/messages
 ```
 
+**Key 填在设置页最上面第一张卡片**，只列当前两档在用的端点，填完就能用；
+端点列表里每项也各带一个 Key 输入框，两处是同一份数据，改一处另一处跟着变。
+两档任一缺 Key 时，首页会显示「还没填 API Key」并给出直达入口。
+
 预置四个端点（Anthropic、智谱 GLM、Kimi、MiniMax），URL 与 Key 都可改、不可删。
 每个端点有「测试连接」按钮：地址、协议、Key 三者错任一个报错都长得一样，
 这个按钮把原始状态码和响应片段直接摆出来。

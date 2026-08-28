@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.ecs.core.agg.Aggregator
 import com.ecs.core.model.RecordStatus
+import com.ecs.core.model.activeEndpoints
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.Badge
 import com.ecs.ui.component.BusyBar
@@ -33,6 +34,9 @@ fun HomeScreen(vm: AppViewModel, nav: NavHostController) {
     val records by vm.records.collectAsState()
     val tree by vm.tree.collectAsState()
     val busy by vm.busy.collectAsState()
+    val endpoints by vm.endpoints.collectAsState()
+    val visionEndpoint by vm.visionEndpoint.collectAsState()
+    val textEndpoint by vm.textEndpoint.collectAsState()
 
     val maturity = vm.maturity()
     val consistency = vm.consistency()
@@ -43,6 +47,23 @@ fun HomeScreen(vm: AppViewModel, nav: NavHostController) {
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         BusyBar(busy)
+
+        // 新用户先落在首页，把断掉的第一步接上
+        val active = activeEndpoints(endpoints, visionEndpoint, textEndpoint)
+        if (active.isEmpty() || active.any { !it.configured }) {
+            SectionCard("还没填 API Key") {
+                Text(
+                    "识别、标注、报告生成都要联网。设置页最上面第一张卡片就是填 Key 的地方，" +
+                        "填完再生成考点树。",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                Button(
+                    onClick = { nav.navigate(Routes.SETTINGS) },
+                    modifier = Modifier.padding(top = 8.dp),
+                ) { Text("去填 API Key") }
+            }
+        }
 
         if (tree == null) {
             SectionCard("考点树尚未生成") {
