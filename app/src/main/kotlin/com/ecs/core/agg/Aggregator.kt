@@ -1,285 +1,97 @@
 package com.ecs.core.agg
 
-import com.ecs.core.model.Confidence
-import com.ecs.core.model.Difficulty
 import com.ecs.core.model.ErrorRecord
-import com.ecs.core.model.Section
 import com.ecs.core.tree.KaodianTree
 import com.ecs.core.tree.truncate
-import kotlin.math.abs
-import kotlin.math.roundToInt
 
 /**
- * L1 / L2 实时计算。不落库，改了 L0 报告自动更新。
+ * 自下而上的递归聚合。
  *
- * 统计口径（PRD 2.3）：只有 status.countsInStats 为真的记录（活跃 / 休眠）进入任何数字；
- * 休眠记录参与聚合但不出现在报告里，由 [KaodianStat.reportable] 控制。
+ * 只做一件事：把原题按考点树的某个层级归堆，交出这一堆的「答案形式」。
+ * 层级从末端（depth 4）往上走到大类（depth 1），上一层的输入就是下一层的输出——
+ * 末端交出一条 form_rule，三层视图收到的就是这些 form_rule 的集合。
+ *
+ * 统计口径不再存在：错误率、加权失分、跨卷次数、成熟度门槛这些都答的是
+ * 「你错得怎么样」，而这个应用要答的是「这一类空该填成什么形态」。
  */
 object Aggregator {
 
-    // ---------- L1 ----------
+    /** 复习层级。数字对应 [truncate] 的 depth。 */
+    enum class Level(val depth: Int, val label: String, val hint: String) {
+        LEAF(4, "末端", "一个考点对应一个可执行动作"),
+        THIRD(3, "三层", "把相邻末端并成一组"),
+        SECOND(2, "两层", "看词类/结构层面的共性"),
+        ROOT(1, "大类", "词法 / 句法 / 语法");
 
-    data class ReverseRow(
+        companion object {
+            val DEFAULT = LEAF
+            fun ofDepth(depth: Int): Level = entries.firstOrNull { it.depth == depth } ?: DEFAULT
+        }
+    }
+
+    /** 一道题在复习视图里露出的东西：看到什么特征 → 填成什么。 */
+    data class Row(
+        val uid: String,
         val eye: String,
         val formContext: String?,
         val answer: String?,
+        val stem: String?,
     )
 
-    data class KaodianStat(
+    /**
+     * 一个层级上的一组。
+     *
+     * [formRules] 就是这一组的输出：末端层是它自己的规则形态，
+     * 往上则是下层各组规则形态的并集——「上一阶段的输出变成这一阶段的输入」。
+     */
+    data class Group(
         val kaodian: String,
         val root: String,
-        val formRule: String,
-        val slots: Int,
-        val wrong: Int,
-        val lucky: Int,
-        /** 4.1 count = Σ(错 1.0 / 蒙对 0.5) */
-        val weighted: Double,
-        /** 4.1 该考点出现过的不同 src.paper 数量。优先级排序用这个。 */
-        val hitPapers: Int,
-        val papers: List<String>,
-        val byDifficulty: Map<Difficulty, Int>,
-        val bySection: Map<Section, Int>,
-        val eyes: List<String>,
-        val rows: List<ReverseRow>,
-        val reportable: Boolean,
-        val lastSeen: Long,
-    )
+        val formRules: List<String>,
+        val children: List<String>,
+        val rows: List<Row>,
+    ) {
+        val leafName: String get() = kaodian.substringAfterLast('/')
+        val size: Int get() = rows.size
+    }
 
-    /** 参与统计的记录：活跃 + 休眠，且已标注考点。 */
+    /** 有考点、有形态的记录才进复习；缺标注的留在原题页等着补。 */
     fun countable(records: List<ErrorRecord>): List<ErrorRecord> =
-        records.filter { it.status.countsInStats && !it.kaodian.isNullOrBlank() }
+        records.filter { !it.kaodian.isNullOrBlank() }
 
-    fun kaodianStats(
+    fun groups(
         records: List<ErrorRecord>,
-        tree: KaodianTree?,
-        depth: Int = 3,
-    ): List<KaodianStat> {
+        tree: KaodianTree? = null,
+        level: Level = Level.DEFAULT,
+    ): List<Group> {
         val usable = countable(records)
-        return usable.groupBy { truncate(it.kaodian!!, depth) }
-            .map { (path, group) ->
-                val papers = group.map { it.src.paper }.distinct()
-                KaodianStat(
+        return usable.groupBy { truncate(it.kaodian!!, level.depth) }
+            .map { (path, members) ->
+                Group(
                     kaodian = path,
-                    root = path.substringBefore("/"),
-                    formRule = resolveFormRule(path, group, tree),
-                    slots = group.size,
-                    wrong = group.count { it.confidence == Confidence.WRONG },
-                    lucky = group.count { it.confidence == Confidence.LUCKY },
-                    weighted = group.sumOf { it.weight },
-                    hitPapers = papers.size,
-                    papers = papers,
-                    byDifficulty = group.mapNotNull { it.difficulty }
-                        .groupingBy { it }.eachCount(),
-                    bySection = group.groupingBy { it.src.section }.eachCount(),
-                    eyes = group.mapNotNull { it.eye }.distinct(),
-                    rows = group.filter { !it.eye.isNullOrBlank() }
-                        .map { ReverseRow(it.eye!!, it.formContext, it.answer) },
-                    reportable = group.any { it.status.showsInReport },
-                    lastSeen = group.maxOf { it.createdAt },
+                    root = path.substringBefore('/'),
+                    formRules = formRulesOf(path, members, tree),
+                    // 这一组下面还压着哪些更细的考点，用来说明它是由什么汇总来的
+                    children = members.mapNotNull { it.kaodian }.distinct().sorted()
+                        .filter { it != path },
+                    rows = members.filter { !it.eye.isNullOrBlank() }
+                        .map { Row(it.uid, it.eye!!, it.formContext, it.answer, it.stem) },
                 )
             }
-            .sortedWith(compareByDescending<KaodianStat> { it.hitPapers }.thenByDescending { it.weighted })
+            .sortedWith(compareBy({ it.root }, { it.kaodian }))
     }
 
     /**
-     * 截断到某层后，form_rule 只在「该层就是末端节点」时唯一。
-     * 截断层高于末端时给出成员节点规则的合并展示。
+     * 这一组的答案形式。末端层直接取节点自带的规则形态；
+     * 往上则收集下层各条，去重后保序——那正是下一层要读的输入。
      */
-    private fun resolveFormRule(path: String, group: List<ErrorRecord>, tree: KaodianTree?): String {
-        tree?.formRuleOf(path)?.let { return it }
-        val rules = group.mapNotNull { it.formRule }.distinct()
-        return when {
-            rules.isEmpty() -> ""
-            rules.size == 1 -> rules.first()
-            else -> rules.joinToString("；")
-        }
-    }
-
-    // ---------- L2 ----------
-
-    data class SectionRate(
-        val section: Section,
-        /** 分子：计入分母的卷子里的加权错空数。 */
-        val weightedWrong: Double,
-        /** 分母：Σ src.total_in_section，缺失的卷子既不计分子也不计分母（4.2）。 */
-        val totalSlots: Int,
-        val papersCounted: Int,
-        val papersSkipped: Int,
-    ) {
-        val rate: Double? get() = if (totalSlots > 0) weightedWrong / totalSlots else null
-        /** 4.3 加权失分。 */
-        val weightedLoss: Double? get() = rate?.times(section.fullScore)
-    }
-
-    fun sectionRates(records: List<ErrorRecord>): List<SectionRate> {
-        val usable = records.filter { it.status.countsInStats }
-        return Section.entries.map { section ->
-            val inSection = usable.filter { it.src.section == section }
-            // total_in_section 属于 (卷, 题型) 维度，取该维度上任一非空值
-            val totals = inSection.groupBy { it.src.paper }
-                .mapValues { (_, rs) -> rs.firstNotNullOfOrNull { it.src.totalInSection } }
-            val counted = totals.filterValues { it != null }
-            val denom = counted.values.filterNotNull().sum()
-            val numer = inSection.filter { it.src.paper in counted.keys }.sumOf { it.weight }
-            SectionRate(
-                section = section,
-                weightedWrong = numer,
-                totalSlots = denom,
-                papersCounted = counted.size,
-                papersSkipped = totals.size - counted.size,
-            )
-        }
-    }
-
-    // ---------- 4.6 跨考点关联 ----------
-
-    data class Correlation(
-        val a: String,
-        val b: String,
-        val strong: Int,
-        val weak: Int,
-    ) {
-        val times: Int get() = strong + weak
-    }
-
-    fun correlations(records: List<ErrorRecord>, depth: Int = 3, minTimes: Int = 3): List<Correlation> {
-        val usable = countable(records)
-        val strong = mutableMapOf<Pair<String, String>, Int>()
-        val weak = mutableMapOf<Pair<String, String>, Int>()
-
-        usable.groupBy { it.src.paper }.forEach { (_, inPaper) ->
-            for (i in inPaper.indices) for (j in i + 1 until inPaper.size) {
-                val x = inPaper[i]; val y = inPaper[j]
-                val kx = truncate(x.kaodian!!, depth); val ky = truncate(y.kaodian!!, depth)
-                if (kx == ky) continue
-                val key = if (kx < ky) kx to ky else ky to kx
-                val sameNo = x.src.no == y.src.no && x.src.slot != y.src.slot
-                when {
-                    sameNo -> strong.merge(key, 1, Int::plus)
-                    abs(x.src.no - y.src.no) <= 2 -> weak.merge(key, 1, Int::plus)
-                }
-            }
-        }
-        // co_error 显式关联视为强关联
-        val byUid = usable.associateBy { it.uid }
-        val byId = usable.groupBy { it.id }
-        usable.forEach { r ->
-            r.coError.forEach { ref ->
-                val other = byUid[ref] ?: byId[ref]?.firstOrNull() ?: return@forEach
-                val kx = truncate(r.kaodian!!, depth)
-                val ky = truncate(other.kaodian!!, depth)
-                if (kx == ky) return@forEach
-                val key = if (kx < ky) kx to ky else ky to kx
-                strong.merge(key, 1, Int::plus)
-            }
-        }
-
-        return (strong.keys + weak.keys).map { key ->
-            Correlation(key.first, key.second, strong[key] ?: 0, weak[key] ?: 0)
-        }.filter { it.times >= minTimes }
-            .sortedWith(compareByDescending<Correlation> { it.strong }.thenByDescending { it.times })
-    }
-
-    // ---------- 4.5 循环终止条件 ----------
-
-    data class Termination(
-        /** 考点级：仍出现在报告中的活跃考点数。 */
-        val activeKaodian: Int,
-        /** 轮次级：本轮与上轮考点分布余弦相似度。 */
-        val roundSimilarity: Double?,
-        val sourceExhausted: Boolean,
-        /** 整体级：考点树覆盖率。 */
-        val coverage: Double,
-        val warmMode: Boolean,
-    )
-
-    fun termination(
-        records: List<ErrorRecord>,
+    private fun formRulesOf(
+        path: String,
+        members: List<ErrorRecord>,
         tree: KaodianTree?,
-        depth: Int = 3,
-    ): Termination {
-        val usable = countable(records)
-        val active = usable.filter { it.status.showsInReport }
-            .map { truncate(it.kaodian!!, depth) }.distinct().size
-
-        val batches = usable.map { it.src.batch }.distinct().sorted()
-        val sim = if (batches.size >= 2) {
-            val cur = distribution(usable.filter { it.src.batch == batches.last() }, depth)
-            val prev = distribution(usable.filter { it.src.batch == batches[batches.size - 2] }, depth)
-            cosineOfDistributions(cur, prev)
-        } else null
-
-        val leaves = tree?.liveNodes?.map { it.path }?.toSet().orEmpty()
-        val used = usable.mapNotNull { it.kaodian }.toSet()
-        val coverage = if (leaves.isEmpty()) 0.0 else used.count { it in leaves }.toDouble() / leaves.size
-
-        return Termination(
-            activeKaodian = active,
-            roundSimilarity = sim,
-            sourceExhausted = (sim ?: 0.0) > 0.8,
-            coverage = coverage,
-            warmMode = coverage > 0.95 && active < 5,
-        )
-    }
-
-    fun distribution(records: List<ErrorRecord>, depth: Int): Map<String, Double> =
-        records.groupBy { truncate(it.kaodian!!, depth) }
-            .mapValues { (_, g) -> g.sumOf { it.weight } }
-
-    fun cosineOfDistributions(a: Map<String, Double>, b: Map<String, Double>): Double {
-        if (a.isEmpty() || b.isEmpty()) return 0.0
-        val keys = a.keys + b.keys
-        var dot = 0.0; var na = 0.0; var nb = 0.0
-        keys.forEach { k ->
-            val x = a[k] ?: 0.0; val y = b[k] ?: 0.0
-            dot += x * y; na += x * x; nb += y * y
-        }
-        if (na == 0.0 || nb == 0.0) return 0.0
-        return dot / (Math.sqrt(na) * Math.sqrt(nb))
-    }
-
-    // ---------- F9 数据成熟度 ----------
-
-    enum class Maturity(val label: String) {
-        SEED("样本不足"), PARTIAL("样本偏少"), READY("样本充足");
-    }
-
-    data class MaturityState(
-        val countedSlots: Int,
-        val level: Maturity,
-        val microEnabled: Boolean,
-        val macroEnabled: Boolean,
-        val macroCaveat: Boolean,
-        val hint: String,
-    )
-
-    fun maturity(records: List<ErrorRecord>): MaturityState {
-        val n = countable(records).size
-        return when {
-            n < 50 -> MaturityState(n, Maturity.SEED, false, false, false, "继续录入 ${50 - n} 条后开放报告")
-            n <= 200 -> MaturityState(n, Maturity.PARTIAL, true, true, true, "样本不足，大方向仅供参考")
-            else -> MaturityState(n, Maturity.READY, true, true, false, "样本充足")
-        }
-    }
-
-    // ---------- F8 标注一致率 ----------
-
-    data class Consistency(val checked: Int, val consistent: Int) {
-        val rate: Double? get() = if (checked == 0) null else consistent.toDouble() / checked
-        val alarm: Boolean get() = rate?.let { it < 0.85 } ?: false
-        val display: String get() = rate?.let { "${(it * 100).roundToInt()}%" } ?: "—"
-    }
-
-    /** 抽检只统计已出结论的记录；人工确认记为一致。 */
-    fun consistency(records: List<ErrorRecord>): Consistency {
-        val checked = records.filter {
-            it.verified == com.ecs.core.model.Verified.CONSISTENT ||
-                it.verified == com.ecs.core.model.Verified.CONFLICT ||
-                it.verified == com.ecs.core.model.Verified.MANUAL
-        }
-        return Consistency(
-            checked = checked.size,
-            consistent = checked.count { it.verified != com.ecs.core.model.Verified.CONFLICT },
-        )
+    ): List<String> {
+        tree?.formRuleOf(path)?.let { return listOf(it) }
+        return members.mapNotNull { it.formRule?.takeIf { rule -> rule.isNotBlank() } }
+            .distinct()
     }
 }

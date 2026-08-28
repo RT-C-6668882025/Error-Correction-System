@@ -7,8 +7,6 @@ import com.ecs.agent.PaperScanner
 import com.ecs.agent.PromptProvider
 import com.ecs.agent.Reporter
 import com.ecs.agent.TreeGenerator
-import com.ecs.agent.TreeMaintainer
-import com.ecs.agent.Verifier
 import com.ecs.core.model.ApiEndpoint
 import com.ecs.core.model.BuiltInEndpoints
 import com.ecs.core.model.Protocol
@@ -70,8 +68,6 @@ class Container(app: Application) {
 
     val treeGenerator = TreeGenerator(client, prompts)
     val annotator = Annotator(client, prompts)
-    val verifier = Verifier(client, prompts)
     val reporter = Reporter(client, prompts)
-    val maintainer = TreeMaintainer(client, prompts)
     val scanner = PaperScanner(client, prompts)
 }

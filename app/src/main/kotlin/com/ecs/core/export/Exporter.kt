@@ -1,6 +1,5 @@
 package com.ecs.core.export
 
-import com.ecs.core.agg.Aggregator
 import com.ecs.core.model.ErrorRecord
 import com.ecs.core.model.Section
 import com.ecs.core.tree.KaodianTree
@@ -8,8 +7,8 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * F5 导出。硬指标（验收 #4）：导出包交给全新模型会话，不加任何提示词，
- * 能产出与 F3/F4 同质量的报告。README 是唯一的说明书，必须自洽且 ≤120 行。
+ * 导出。硬指标：导出包交给全新模型会话，不加任何提示词，就能读懂并接着干活。
+ * README 是唯一的说明书，必须自洽且 ≤120 行。
  */
 object Exporter {
 
@@ -26,12 +25,13 @@ object Exporter {
         val readme: String,
         val dataJson: String,
         val dataCsv: String,
-        val reverseTable: String,
     )
 
-    /** 有效 L0 记录：进入统计口径的那些（活跃 / 休眠）。 */
-    fun validRecords(records: List<ErrorRecord>): List<ErrorRecord> =
-        records.filter { it.status.countsInStats }
+    /**
+     * 导出全部原题。统计口径已经不存在了——这份包就是本地的源数据快照，
+     * 还没标注完的也要在里面，否则换个模型重跑时缺原料。
+     */
+    fun validRecords(records: List<ErrorRecord>): List<ErrorRecord> = records
 
     fun build(records: List<ErrorRecord>, tree: KaodianTree?, dateStamp: String): Package {
         val valid = validRecords(records)
@@ -40,7 +40,6 @@ object Exporter {
             readme = readme(valid, tree),
             dataJson = json.encodeToString(valid),
             dataCsv = csv(valid),
-            reverseTable = reverseTable(valid),
         )
     }
 
@@ -48,7 +47,7 @@ object Exporter {
 
     private val HEADERS = listOf(
         "id", "paper", "section", "no", "slot", "batch", "total_in_section",
-        "given", "answer", "confidence", "created_at",
+        "stem", "given", "answer", "confidence", "created_at",
         "eye", "kaodian", "form_rule", "form_context", "secondary",
         "difficulty", "co_error", "tree_version", "verified", "status", "note",
     )
@@ -60,7 +59,8 @@ object Exporter {
                 listOf(
                     r.id, r.src.paper, r.src.section.label, r.src.no.toString(), r.src.slot.toString(),
                     r.src.batch, r.src.totalInSection?.toString() ?: "",
-                    r.given ?: "", r.answer ?: "", r.confidence.label, r.createdAt.toString(),
+                    r.stem ?: "", r.given ?: "", r.answer ?: "",
+                    r.confidence.label, r.createdAt.toString(),
                     r.eye ?: "", r.kaodian ?: "", r.formRule ?: "", r.formContext ?: "",
                     r.secondary.joinToString("|"), r.difficulty?.label ?: "",
                     r.coError.joinToString("|"), r.treeVersion ?: "", r.verified.label,
@@ -72,30 +72,6 @@ object Exporter {
 
     private fun esc(v: String): String =
         if (v.any { it == ',' || it == '"' || it == '\n' }) "\"${v.replace("\"", "\"\"")}\"" else v
-
-    // ---------------- F5.2 倒推表 ----------------
-
-    /** 纯背诵材料，不含分析。按 kaodian 分组，遮住 answer 列即可自测。 */
-    fun reverseTable(records: List<ErrorRecord>): String = buildString {
-        appendLine("# 答案倒推表")
-        appendLine()
-        records.filter { !it.kaodian.isNullOrBlank() && !it.eye.isNullOrBlank() }
-            .groupBy { it.kaodian!! }
-            .toSortedMap()
-            .forEach { (kaodian, group) ->
-                appendLine("## $kaodian")
-                group.firstOrNull { !it.formRule.isNullOrBlank() }?.formRule?.let {
-                    appendLine("规则形态：$it")
-                }
-                appendLine()
-                appendLine("| eye | form_context | answer |")
-                appendLine("|---|---|---|")
-                group.forEach {
-                    appendLine("| ${it.eye} | ${it.formContext ?: "—"} | ${it.answer ?: "—"} |")
-                }
-                appendLine()
-            }
-    }
 
     // ---------------- F5.1 README ----------------
 
@@ -132,13 +108,14 @@ object Exporter {
 # 错题元数据（语法填空 + 完成句子）
 
 专升本英语备考的错题字段库。一条记录 = 一个「空」，共 ${records.size} 条（语法填空 $gf / 完成句子 $wc）。
-每条记录记的是「什么特征触发了什么形态」，不含原题。仅凭这些字段即可产出诊断报告与背诵材料。
+每条记录含题干、答案，以及「什么特征触发了什么形态」的标注。
+考点是路径式的，按前缀截断即可自下而上地并成更粗的层级。
 
 ## 1. 数据文件
 
 - `data.json` 全部有效记录，结构化
 - `data.csv` 同一批数据的扁平化版本
-- `倒推表.md` eye → form_context → answer，按考点分组
+- `README.md` 字段词典与聚合口径，交给别的 AI 时先给它这个
 
 ## 2. 字段词典
 
@@ -150,6 +127,7 @@ object Exporter {
 | `src.no` / `src.slot` | int | 卷内题号 / 该题内第几个空 |
 | `src.batch` | string | 录入批次 |
 | `src.total_in_section` | int? | 该卷该题型总空数，错误率分母；缺失则该卷不计入分子分母 |
+| `stem` | string? | 题干全文，选择题为剥掉选项后的句子 |
 | `given` | string? | 括号提示词或中文提示 |
 | `answer` | string? | 正确答案 |
 | `confidence` | enum | 错(权重1.0) / 蒙对(权重0.5) |
@@ -188,13 +166,12 @@ object Exporter {
 最终写法，不进入对该考点的判断。同一 kaodian 下的全部 eye 放在一起，若指向同一特征，
 该考点是「识别问题」；若分成几组，说明有几种触发场景，要分别练。
 
-聚合口径：
-- 计数 `count = Σ(confidence == 错 ? 1.0 : 0.5)`
-- 跨卷次数 `hit_papers` = 该考点出现过的不同 `src.paper` 数
-- 优先级用 `hit_papers` 排序，不用总次数：同卷错 5 次可能是该卷偏，五卷各错 1 次才是真薄弱
-- 错误率 = 该题型加权错空数 / Σ `total_in_section`；加权失分 = 错误率 × 满分
-- 只统计 `status` 为 活跃 / 休眠 的记录
-- 关联：同 `paper` 同 `no` 不同 `slot` 为强关联，`no` 差值 ≤2 为弱关联，出现 ≥3 次才成立
+自下而上的递归聚合：
+- 把 `kaodian` 按 `/` 截断到第 N 段就是第 N 层，depth 4 是末端，depth 1 是 词法/句法/语法
+- 每一层每一组交出的是这一组的答案形式（`form_rule` 去重后的集合）
+- 上一层的输入就是下一层的输出：末端交出一条 form_rule，三层视图收到的是这些 form_rule
+- 不要算错误率、次数、难度分布这类统计——这份数据要答的是「该填成什么形态」，
+  不是「错得怎么样」
 
 ## 5. 分析禁止项
 
@@ -203,6 +180,7 @@ object Exporter {
 - 不写空泛建议：加强学习、多加练习、注意区分、认真复习、巩固基础
 - 报告层不出现题号
 - 不推测「为什么会错」的心理层级：数据里没有，推出来的都是假信号
+- 不做错误率、优先级排序一类的统计结论
 - 部分记录由单选题剥离选项后录入，与填空记录完全同构，不要区分对待，也不要推测干扰项
 - 删掉后结论不变的句子，一律删掉
         """.trimIndent().lines()

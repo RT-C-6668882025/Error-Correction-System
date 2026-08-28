@@ -11,9 +11,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -64,6 +67,20 @@ fun MarkdownBlock(text: String, modifier: Modifier = Modifier) {
         modifier = modifier.padding(12.dp),
         style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
     )
+}
+
+/** 提示条。原先挂在首页文件里，首页删了之后提到公共组件。 */
+@Composable
+fun MessageBar(vm: com.ecs.ui.AppViewModel) {
+    val message by vm.message.collectAsState()
+    if (message != null) {
+        SectionCard("提示") {
+            Text(message!!, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
+            OutlinedButton(onClick = { vm.dismissMessage() }, modifier = Modifier.padding(top = 8.dp)) {
+                Text("知道了")
+            }
+        }
+    }
 }
 
 @Composable

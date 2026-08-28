@@ -146,6 +146,31 @@ class EndpointTest {
         assertTrue(ModelCatalog.suggestionsFor("nonexistent", vision = false).isEmpty())
     }
 
+    @Test fun `deepseek and a lan endpoint are both present`() {
+        val ds = assertNotNull(BuiltInEndpoints.byId(BuiltInEndpoints.DEEPSEEK))
+        assertEquals(Protocol.OPENAI, ds.protocol)
+        assertEquals("https://api.deepseek.com/v1/chat/completions", ds.url)
+
+        val lan = assertNotNull(BuiltInEndpoints.byId(BuiltInEndpoints.LOCAL))
+        // 局域网自部署走 http，不能被强行改成 https，否则 Ollama 连不上
+        assertTrue(lan.url.startsWith("http://"))
+        assertTrue(lan.url.endsWith("/chat/completions"))
+    }
+
+    @Test fun `deepseek text models are suggested, glm-ocr is a vision one`() {
+        val ds = ModelCatalog.suggestionsFor(BuiltInEndpoints.DEEPSEEK, vision = false).map { it.id }
+        assertTrue(ds.containsAll(listOf("deepseek-chat", "deepseek-reasoner")))
+        assertTrue(ModelCatalog.suggestionsFor(BuiltInEndpoints.DEEPSEEK, vision = true).isEmpty())
+
+        val ocr = assertNotNull(ModelCatalog.byId("glm-ocr"))
+        assertTrue(ocr.vision)
+    }
+
+    @Test fun `no two models share an id`() {
+        val ids = ModelCatalog.MODELS.map { it.id }
+        assertEquals(ids.size, ids.distinct().size)
+    }
+
     @Test fun `defaults point at real presets`() {
         assertNotNull(BuiltInEndpoints.byId(ModelCatalog.DEFAULT_TEXT_ENDPOINT))
         assertNotNull(BuiltInEndpoints.byId(ModelCatalog.DEFAULT_VISION_ENDPOINT))
@@ -253,9 +278,9 @@ class PromptCatalogTest {
     }
 
     @Test fun `render appends the contract to the body`() {
-        val out = PromptSlot.VERIFY.render(null)
-        assertTrue(out.startsWith(PromptSlot.VERIFY.body.trim()))
-        assertTrue(out.endsWith(PromptSlot.VERIFY.contract.trim()))
+        val out = PromptSlot.REVIEW.render(null)
+        assertTrue(out.startsWith(PromptSlot.REVIEW.body.trim()))
+        assertTrue(out.endsWith(PromptSlot.REVIEW.contract.trim()))
     }
 
     @Test fun `an override replaces only the body`() {
@@ -273,10 +298,10 @@ class PromptCatalogTest {
     }
 
     @Test fun `the output shape survives any override`() {
-        // 用户把正文清空也毁不掉解析：JSON 关键字在契约里
+        // 用户把正文清空也毁不掉解析：约束都在契约里
         assertTrue(PromptSlot.ANNOTATE.render("").contains("\"choice\""))
-        assertTrue(PromptSlot.VERIFY.render("").contains("\"path\""))
         assertTrue(PromptSlot.ANNOTATE.render("随便写").contains("form_context"))
+        assertTrue(PromptSlot.SCAN.render("").contains("correct_letter"))
     }
 
     @Test fun `the eye banned list is carried into the annotate contract`() {
@@ -290,10 +315,14 @@ class PromptCatalogTest {
         assertTrue(contract.contains("选项"))
     }
 
-    @Test fun `report slots carry the style ban list`() {
-        listOf(PromptSlot.REPORT_MICRO, PromptSlot.REPORT_MACRO).forEach {
-            assertTrue(it.contract.contains("综上所述"))
-            assertTrue(it.contract.contains("题号"))
+    @Test fun `the review slot carries the style ban list`() {
+        assertTrue(PromptSlot.REVIEW.contract.contains("综上所述"))
+        assertTrue(PromptSlot.REVIEW.contract.contains("题号"))
+    }
+
+    @Test fun `slots for deleted tasks are gone`() {
+        listOf("VERIFY", "TREE_MAINTAIN", "REPORT_MICRO", "REPORT_MACRO").forEach {
+            assertNull(PromptSlot.fromName(it), "$it 还在")
         }
     }
 
@@ -305,10 +334,10 @@ class PromptCatalogTest {
     }
 
     @Test fun `modified only counts a real difference`() {
-        assertFalse(PromptSlot.VERIFY.modified(null))
-        assertFalse(PromptSlot.VERIFY.modified(PromptSlot.VERIFY.body))
-        assertFalse(PromptSlot.VERIFY.modified("  ${PromptSlot.VERIFY.body}  "))
-        assertTrue(PromptSlot.VERIFY.modified("别的写法"))
+        assertFalse(PromptSlot.REVIEW.modified(null))
+        assertFalse(PromptSlot.REVIEW.modified(PromptSlot.REVIEW.body))
+        assertFalse(PromptSlot.REVIEW.modified("  ${PromptSlot.REVIEW.body}  "))
+        assertTrue(PromptSlot.REVIEW.modified("别的写法"))
     }
 
     @Test fun `slot names round trip`() {

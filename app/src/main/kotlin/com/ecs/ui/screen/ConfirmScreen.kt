@@ -30,6 +30,7 @@ import com.ecs.core.rules.Validation
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.Badge
 import com.ecs.ui.component.BusyBar
+import com.ecs.ui.component.MessageBar
 import com.ecs.ui.component.SectionCard
 import com.ecs.ui.nav.Routes
 
@@ -75,8 +76,8 @@ fun ConfirmScreen(vm: AppViewModel, nav: NavHostController) {
             }
             Button(
                 onClick = {
-                    vm.confirmScan(paper.trim(), section, spec, null, autoAnnotate)
-                    nav.navigate(Routes.LIST)
+                    vm.confirmScan(paper.trim(), section, spec, autoAnnotate)
+                    nav.navigate(Routes.SOURCE)
                 },
                 enabled = paper.isNotBlank() && parsed.entries.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp),

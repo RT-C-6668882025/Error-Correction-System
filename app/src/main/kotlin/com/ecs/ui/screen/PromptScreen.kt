@@ -27,6 +27,7 @@ import com.ecs.core.prompt.PromptSlot
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.Badge
 import com.ecs.ui.component.BusyBar
+import com.ecs.ui.component.MessageBar
 import com.ecs.ui.component.SectionCard
 
 /**
