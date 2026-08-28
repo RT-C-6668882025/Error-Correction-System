@@ -14,6 +14,8 @@ repositories { mavenCentral() }
 
 dependencies {
     "implementation"("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    "implementation"("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+    "implementation"("com.squareup.okhttp3:okhttp:4.12.0")
     "testImplementation"(kotlin("test"))
 }
 
@@ -22,7 +24,10 @@ extensions.configure<org.gradle.api.plugins.JavaPluginExtension>("java") {
 }
 
 extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension>("kotlin") {
-    sourceSets.named("main") { kotlin.srcDir("../app/src/main/kotlin/com/ecs/core") }
+    sourceSets.named("main") {
+        kotlin.srcDir("../app/src/main/kotlin/com/ecs/core")
+        kotlin.srcDir("../app/src/main/kotlin/com/ecs/agent")
+    }
     sourceSets.named("test") { kotlin.srcDir("src/test/kotlin") }
 }
 
