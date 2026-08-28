@@ -12,13 +12,18 @@ import com.ecs.agent.TreeMaintainer
 import com.ecs.core.agg.Aggregator
 import com.ecs.core.export.CsvImporter
 import com.ecs.core.export.Exporter
+import com.ecs.core.model.ApiEndpoint
+import com.ecs.core.model.BuiltInEndpoints
 import com.ecs.core.model.ErrorRecord
+import com.ecs.core.model.ModelCatalog
 import com.ecs.core.model.RecordStatus
 import com.ecs.core.model.Section
 import com.ecs.core.model.Verified
+import com.ecs.core.prompt.PromptSlot
 import com.ecs.core.report.ReportBuilder
 import com.ecs.core.tree.KaodianTree
 import com.ecs.data.repo.RecordRepository
+import com.ecs.data.update.UpdateChecker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -47,8 +52,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
-    private val _apiKey = MutableStateFlow("")
-    val apiKey: StateFlow<String> = _apiKey.asStateFlow()
+    private val _endpoints = MutableStateFlow(BuiltInEndpoints.ALL)
+    val endpoints: StateFlow<List<ApiEndpoint>> = _endpoints.asStateFlow()
+
+    private val _textModel = MutableStateFlow(ModelCatalog.DEFAULT_TEXT)
+    val textModel: StateFlow<String> = _textModel.asStateFlow()
+
+    private val _visionModel = MutableStateFlow(ModelCatalog.DEFAULT_VISION)
+    val visionModel: StateFlow<String> = _visionModel.asStateFlow()
+
+    private val _textEndpoint = MutableStateFlow(ModelCatalog.DEFAULT_TEXT_ENDPOINT)
+    val textEndpoint: StateFlow<String> = _textEndpoint.asStateFlow()
+
+    private val _visionEndpoint = MutableStateFlow(ModelCatalog.DEFAULT_VISION_ENDPOINT)
+    val visionEndpoint: StateFlow<String> = _visionEndpoint.asStateFlow()
 
     private val _microDepth = MutableStateFlow(3)
     val microDepth: StateFlow<Int> = _microDepth.asStateFlow()
@@ -56,7 +73,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _macroDepth = MutableStateFlow(2)
     val macroDepth: StateFlow<Int> = _macroDepth.asStateFlow()
 
-    /** 识别结果暂存，供确认页使用。 */
+    /** 识别结果暂存，供确认页使用。选项在这里可见，入库时丢弃。 */
     private val _scanned = MutableStateFlow<List<PaperScanner.Question>>(emptyList())
     val scanned: StateFlow<List<PaperScanner.Question>> = _scanned.asStateFlow()
 
@@ -69,14 +86,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _macroNarrative = MutableStateFlow(ReportBuilder.MacroNarrative())
     val macroNarrative: StateFlow<ReportBuilder.MacroNarrative> = _macroNarrative.asStateFlow()
 
+    private val _promptOverrides = MutableStateFlow<Map<PromptSlot, String>>(emptyMap())
+    val promptOverrides: StateFlow<Map<PromptSlot, String>> = _promptOverrides.asStateFlow()
+
+    private val _updateResult = MutableStateFlow<UpdateChecker.Result?>(null)
+    val updateResult: StateFlow<UpdateChecker.Result?> = _updateResult.asStateFlow()
+
+    val installedVersion: String get() = container.updateChecker.installedVersion()
+
     init {
         viewModelScope.launch {
             container.treeStore.load()
-            _apiKey.value = runCatching { container.settings.apiKey.first() }.getOrDefault("")
-            _microDepth.value = runCatching { container.settings.microDepth.first() }.getOrDefault(3)
-            _macroDepth.value = runCatching { container.settings.macroDepth.first() }.getOrDefault(2)
+            refreshSettings()
+            _promptOverrides.value = runCatching { container.promptStore.overrides() }.getOrDefault(emptyMap())
             repo.sweepDormancy()
         }
+    }
+
+    private suspend fun refreshSettings() {
+        val s = container.settings
+        _endpoints.value = runCatching { s.endpoints.first() }.getOrDefault(BuiltInEndpoints.ALL)
+        _textModel.value = runCatching { s.textModel.first() }.getOrDefault(ModelCatalog.DEFAULT_TEXT)
+        _visionModel.value = runCatching { s.visionModel.first() }.getOrDefault(ModelCatalog.DEFAULT_VISION)
+        _textEndpoint.value =
+            runCatching { s.textEndpoint.first() }.getOrDefault(ModelCatalog.DEFAULT_TEXT_ENDPOINT)
+        _visionEndpoint.value =
+            runCatching { s.visionEndpoint.first() }.getOrDefault(ModelCatalog.DEFAULT_VISION_ENDPOINT)
+        _microDepth.value = runCatching { s.microDepth.first() }.getOrDefault(3)
+        _macroDepth.value = runCatching { s.macroDepth.first() }.getOrDefault(2)
     }
 
     fun dismissMessage() { _message.value = null }
@@ -97,9 +134,42 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- 设置 ----------
 
-    fun setApiKey(v: String) {
-        _apiKey.value = v
-        viewModelScope.launch { container.settings.setApiKey(v) }
+    // ---------- 端点与模型 ----------
+
+    fun saveEndpoint(endpoint: ApiEndpoint) = run("保存端点…") {
+        container.settings.upsertEndpoint(endpoint)
+        refreshSettings()
+        _message.value = "已保存 ${endpoint.name}　请求地址 ${endpoint.url}"
+    }
+
+    fun deleteEndpoint(id: String) = run("删除端点…") {
+        container.settings.deleteEndpoint(id)
+        refreshSettings()
+    }
+
+    /** 中转站地址、协议、Key 三者错任一个，报错都长得一样，所以给一个能自查的按钮。 */
+    fun testEndpoint(endpoint: ApiEndpoint, modelId: String) = run("测试连接…") {
+        _message.value = container.client.ping(endpoint, modelId)
+    }
+
+    fun setTextModel(v: String) {
+        _textModel.value = v
+        viewModelScope.launch { container.settings.setTextModel(v) }
+    }
+
+    fun setVisionModel(v: String) {
+        _visionModel.value = v
+        viewModelScope.launch { container.settings.setVisionModel(v) }
+    }
+
+    fun setTextEndpoint(v: String) {
+        _textEndpoint.value = v
+        viewModelScope.launch { container.settings.setTextEndpoint(v) }
+    }
+
+    fun setVisionEndpoint(v: String) {
+        _visionEndpoint.value = v
+        viewModelScope.launch { container.settings.setVisionEndpoint(v) }
     }
 
     fun setMicroDepth(v: Int) {
@@ -111,6 +181,37 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _macroDepth.value = v
         viewModelScope.launch { container.settings.setMacroDepth(v) }
     }
+
+    fun endpointOf(id: String): ApiEndpoint? = _endpoints.value.firstOrNull { it.id == id }
+
+    /** 选中的端点缺 Key 或缺地址——设置页据此给出准确提示。 */
+    fun endpointReady(id: String): Boolean = endpointOf(id)?.configured == true
+
+    // ---------- 提示词 ----------
+
+    fun savePrompt(slot: PromptSlot, body: String) = run("保存提示词…") {
+        container.promptStore.save(slot, body)
+        _promptOverrides.value = container.promptStore.overrides()
+    }
+
+    fun resetPrompt(slot: PromptSlot) = run("还原默认…") {
+        container.promptStore.reset(slot)
+        _promptOverrides.value = container.promptStore.overrides()
+    }
+
+    fun resetAllPrompts() = run("全部还原…") {
+        container.promptStore.resetAll()
+        _promptOverrides.value = container.promptStore.overrides()
+        _message.value = "所有提示词已还原为默认"
+    }
+
+    // ---------- 检查更新 ----------
+
+    fun checkUpdate() = run("检查更新…") {
+        _updateResult.value = container.updateChecker.check()
+    }
+
+    // ---------- F7.1 树生成 ----------
 
     // ---------- F7.1 树生成 ----------
 
@@ -157,7 +258,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         val result = repo.quickAdd(paper, section, spec, total, details = details)
         val stems = questions.associate { q -> (q.no to q.slot) to q.stem }
+        val optionsByKey = questions.associate { q ->
+            (q.no to q.slot) to q.options.map { it.content }
+        }
         val lowConfidence = questions.filter { it.confidence < 0.8 }.size
+        val stripped = questions.count { it.isChoice }
 
         if (autoAnnotate) {
             val t = tree.value
@@ -165,22 +270,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 _message.value = "已录入 ${result.inserted} 条；考点树未生成，标注跳过"
             } else {
                 var done = 0
+                var refused = 0
                 result.records.forEach { r ->
-                    val stem = stems[r.src.no to r.src.slot].orEmpty()
+                    val key = r.src.no to r.src.slot
+                    val stem = stems[key].orEmpty()
                     if (stem.isBlank()) return@forEach
                     runCatching {
                         val out = container.annotator.annotate(
-                            Annotator.Input(stem, r.given, r.answer, section.label), t
+                            Annotator.Input(
+                                stem, r.given, r.answer, section.label, optionsByKey[key].orEmpty()
+                            ),
+                            t,
                         )
                         repo.saveAnnotation(container.annotator.apply(r, out, t))
-                        done++
+                        if (out.notFormType) refused++ else done++
                     }
                 }
-                _message.value = "已录入 ${result.inserted} 条，标注 $done 条" +
-                    if (lowConfidence > 0) "；$lowConfidence 个空识别置信度偏低，留在待完善" else ""
+                _message.value = buildString {
+                    append("已录入 ${result.inserted} 条，标注 $done 条")
+                    if (stripped > 0) append("；剥离选择题 $stripped 道")
+                    if (refused > 0) append("；$refused 道推不出形态，已挡在人工队列")
+                    if (lowConfidence > 0) append("；$lowConfidence 个空识别置信度偏低，留在待完善")
+                }
             }
         } else {
-            _message.value = "已录入 ${result.inserted} 条"
+            _message.value = "已录入 ${result.inserted} 条" +
+                if (stripped > 0) "；剥离选择题 $stripped 道" else ""
         }
         _scanned.value = emptyList()
     }
@@ -196,19 +311,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- F7.2 标注 ----------
 
-    fun annotate(record: ErrorRecord, stem: String) = run("标注中…") {
-        val t = tree.value ?: throw IllegalStateException("考点树尚未生成")
-        val out = container.annotator.annotate(
-            Annotator.Input(stem, record.given, record.answer, record.src.section.label), t
-        )
-        val annotated = container.annotator.apply(record, out, t)
-        val saved = repo.saveAnnotation(annotated)
-        _message.value = if (out.unmatched) {
-            "五个候选都不匹配，已记为待归位"
-        } else {
-            "已标注：${saved.kaodian}（${saved.status.label}）"
+    fun annotate(record: ErrorRecord, stem: String, options: List<String> = emptyList()) =
+        run("标注中…") {
+            val t = tree.value ?: throw IllegalStateException("考点树尚未生成")
+            val out = container.annotator.annotate(
+                Annotator.Input(stem, record.given, record.answer, record.src.section.label, options), t
+            )
+            val saved = repo.saveAnnotation(container.annotator.apply(record, out, t))
+            _message.value = when {
+                out.notFormType -> "剥离后推不出形态，这题不属于填空类考点，已记为不完整进人工队列"
+                out.unmatched -> "五个候选都不匹配，已记为待归位"
+                else -> "已标注：${saved.kaodian}（${saved.status.label}）"
+            }
         }
-    }
 
     /** 待完善批量标注：题干缺失时用 given + answer 兜底。 */
     fun annotateBatch(targets: List<ErrorRecord>, stems: Map<String, String> = emptyMap()) =

@@ -92,15 +92,25 @@ fun ConfirmScreen(vm: AppViewModel, nav: NavHostController) {
                 Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("${q.no}-${q.slot}", style = MaterialTheme.typography.labelLarge)
+                        if (q.isChoice) Badge("已剥离选项，按填空录入", MaterialTheme.colorScheme.primary)
                         if (q.confidence < Validation.IDENTIFY_CONF_FLOOR) {
                             Badge("置信度 %.2f".format(q.confidence), MaterialTheme.colorScheme.error)
                         }
-                        q.given?.let { Badge(it, MaterialTheme.colorScheme.primary) }
+                        q.given?.let { Badge(it, MaterialTheme.colorScheme.secondary) }
                     }
+                    // 展示的是剥离后的题干，请你确认的就是它
                     Text(q.stem, style = MaterialTheme.typography.bodySmall)
                     q.answer?.let {
                         Text("答案：$it", style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.secondary)
+                    }
+                    if (q.isChoice) {
+                        Text(
+                            "选项 ${q.options.joinToString(" / ") { o -> "${o.letter}.${o.content}" }}" +
+                                "　仅供你核对，不入库",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary,
+                        )
                     }
                 }
             }

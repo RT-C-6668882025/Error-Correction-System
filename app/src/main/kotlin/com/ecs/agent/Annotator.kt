@@ -2,6 +2,7 @@ package com.ecs.agent
 
 import com.ecs.core.model.Difficulty
 import com.ecs.core.model.ErrorRecord
+import com.ecs.core.prompt.PromptSlot
 import com.ecs.core.rules.Validation
 import com.ecs.core.tree.Embedder
 import com.ecs.core.tree.KaodianTree
@@ -13,14 +14,23 @@ import kotlinx.serialization.json.jsonPrimitive
  *
  * 检索出 Top-5 之后，Agent 只能在这 5 个里选或输出 unmatched；标注环节禁止新建节点。
  * 全树塞进上下文会让它对边缘节点注意力衰减，第 50 条和第 300 条给同类题不同路径，聚合直接裂开。
+ *
+ * 选择题的选项可以进输入（判断需要），但不许进输出：题眼只描述题干里的客观特征。
+ * 剥离后推不出 form_rule 的题——本质不是「填什么形态」——不强行标注，退回人工队列。
+ * 这一条是筛子：真正属于填空类考点的选择题会顺利通过，不属于的会被挡下来。
  */
-class Annotator(private val client: AgentClient) {
+class Annotator(
+    private val client: AgentClient,
+    private val prompts: PromptProvider = PromptProvider.DEFAULT,
+) {
 
     data class Input(
         val stem: String,
         val given: String?,
         val answer: String?,
         val sectionLabel: String,
+        /** 仅作判断依据，不得出现在输出里；不落库。 */
+        val options: List<String> = emptyList(),
     )
 
     data class Output(
@@ -29,25 +39,10 @@ class Annotator(private val client: AgentClient) {
         val formContext: String?,
         val difficulty: Difficulty,
         val unmatched: Boolean,
+        /** 剥离后推不出形态：这道题不属于填空类考点。 */
+        val notFormType: Boolean,
         val candidates: List<String>,
     )
-
-    private fun system(banned: List<String>) = """
-        你在给一条英语错题的「空」做标注。你只做判断，不做记忆：考点必须从给定候选里选。
-
-        输出四件事：
-        1. choice：候选编号 1-5，或字符串 "unmatched"（五个都不对时才用）
-        2. eye 题眼：触发正确判断的客观语言特征。只写看得见的东西——位置、词形、标点、搭配。
-           长度 10 到 25 字。不得出现这些词：${banned.joinToString("、")}。
-           合格：空前有 the，空后无宾语 / as ... as 之间，修饰的是动词 / 中文提示「两小时的」，后接名词
-           不合格：考查名词后缀转换（这是考点）/ 因为这里要用名词形式（这是解释）
-        3. form_context 语境形态：本句独有的限定，最多 20 字，没有就给空字符串。
-           只写这一句才成立的约束，例如「单数，谓语 has 限定」「被动，主语是承受者」。
-           不要重复候选自带的规则形态。
-        4. difficulty：简单 / 中等 / 难
-
-        不要输出 form_rule，它由考点节点带出，与你无关。
-    """.trimIndent()
 
     suspend fun annotate(input: Input, tree: KaodianTree, k: Int = 5): Output {
         val query = Embedder.embed(
@@ -66,6 +61,7 @@ class Annotator(private val client: AgentClient) {
             题干：${input.stem}
             提示词：${input.given ?: "无"}
             正确答案：${input.answer ?: "暂缺"}
+            ${if (input.options.isEmpty()) "" else "原题选项（仅供你判断，禁止写进 eye）：${input.options.joinToString(" / ")}"}
 
             候选考点（只能从中选）：
             $listing
@@ -77,7 +73,7 @@ class Annotator(private val client: AgentClient) {
         var last: Output? = null
         repeat(2) { attempt ->
             val raw = client.complete(
-                system = system(Validation.EYE_BANNED) + retryHint(attempt),
+                system = systemPrompt(input.options.isNotEmpty()) + retryHint(attempt),
                 user = user,
                 maxTokens = 1024,
                 temperature = if (attempt == 0) 0.0 else 0.3,
@@ -89,23 +85,33 @@ class Annotator(private val client: AgentClient) {
             val diff = obj["difficulty"]?.jsonPrimitive?.content?.trim()
                 ?.let { Difficulty.fromLabel(it) } ?: Difficulty.MEDIUM
 
+            val notForm = choice == NOT_FORM
             val index = choice?.toIntOrNull()
-            val unmatched = index == null || index !in 1..hits.size
+            val unmatched = notForm || index == null || index !in 1..hits.size
             val out = Output(
                 kaodian = if (unmatched) null else hits[index!! - 1].node.path,
                 eye = eye,
                 formContext = ctx,
                 difficulty = diff,
                 unmatched = unmatched,
+                notFormType = notForm,
                 candidates = hits.map { it.node.path },
             )
             last = out
+            // 推不出形态的题不重试，直接退回人工：重试只会逼它编一个
+            if (notForm) return out
             // 题眼写砸整条数据作废，值得再要一次
             if (Validation.checkEye(eye).isEmpty() && Validation.checkFormContext(ctx).isEmpty()) {
                 return out
             }
         }
         return last!!
+    }
+
+    /** 选择题多追加一段：选项可进输入，不可进输出。 */
+    private suspend fun systemPrompt(hasOptions: Boolean): String {
+        val base = prompts.text(PromptSlot.ANNOTATE)
+        return if (hasOptions) base + "\n\n" + prompts.text(PromptSlot.ANNOTATE_CHOICE) else base
     }
 
     private fun retryHint(attempt: Int) =
@@ -120,4 +126,8 @@ class Annotator(private val client: AgentClient) {
         difficulty = out.difficulty,
         treeVersion = tree.version,
     )
+
+    companion object {
+        const val NOT_FORM = "not_form"
+    }
 }

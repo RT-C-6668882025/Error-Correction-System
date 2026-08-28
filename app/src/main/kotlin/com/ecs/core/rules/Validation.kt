@@ -19,7 +19,15 @@ object Validation {
     const val IDENTIFY_CONF_FLOOR = 0.8
 
     /** 2.4 禁用词：出现即说明写的是考点/解释，不是客观特征。 */
-    val EYE_BANNED = listOf("考查", "需要", "应该", "主要", "判断")
+    val EYE_BANNED_FIELD = listOf("考查", "需要", "应该", "主要", "判断")
+
+    /**
+     * 选择题剥离后的题眼禁用词。选项不落库，题眼里引用选项等于引用了不存在的东西——
+     * 这条记录换个模型重跑就失效了。
+     */
+    val EYE_BANNED_CHOICE = listOf("选项", "排除", "A项", "B项", "C项", "D项")
+
+    val EYE_BANNED: List<String> = EYE_BANNED_FIELD + EYE_BANNED_CHOICE
 
     data class Issue(val field: String, val message: String, val blocking: Boolean = false)
 
@@ -29,8 +37,11 @@ object Validation {
         val len = eye.trim().length
         if (len < EYE_MIN) issues += Issue("eye", "题眼过短（$len 字，需 $EYE_MIN-$EYE_MAX）")
         if (len > EYE_MAX) issues += Issue("eye", "题眼过长（$len 字，需 $EYE_MIN-$EYE_MAX）")
-        EYE_BANNED.filter { eye.contains(it) }.forEach {
+        EYE_BANNED_FIELD.filter { eye.contains(it) }.forEach {
             issues += Issue("eye", "题眼含禁用词「$it」：写客观特征，不写考点或解释")
+        }
+        EYE_BANNED_CHOICE.filter { eye.contains(it) }.forEach {
+            issues += Issue("eye", "题眼含禁用词「$it」：选项不落库，题眼只能描述题干")
         }
         return issues
     }

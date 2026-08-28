@@ -4,12 +4,16 @@ import com.ecs.agent.Verifier
 import com.ecs.core.export.CsvImporter
 import com.ecs.core.export.Exporter
 import com.ecs.core.model.*
+import com.ecs.core.model.BuiltInEndpoints
+import com.ecs.core.model.ModelCatalog
 import com.ecs.core.tree.Embedder
 import com.ecs.core.tree.KaodianTree
 import com.ecs.core.tree.TreeNode
 import kotlin.test.*
 
-private val client = AgentClient({ "" }, { "" })
+private val client = AgentClient {
+    AgentClient.Config(BuiltInEndpoints.ALL.first(), ModelCatalog.DEFAULT_TEXT)
+}
 
 private fun node(path: String, rule: String) =
     TreeNode(path, rule, Embedder.embed(Embedder.nodeText(path, rule)))

@@ -1,55 +1,164 @@
 package com.ecs.ui.screen
 
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavHostController
+import com.ecs.core.model.ApiEndpoint
+import com.ecs.core.model.ModelCatalog
+import com.ecs.core.model.Protocol
 import com.ecs.ui.AppViewModel
+import com.ecs.ui.component.Badge
 import com.ecs.ui.component.BusyBar
 import com.ecs.ui.component.SectionCard
+import com.ecs.ui.nav.Routes
 
 @Composable
-fun SettingsScreen(vm: AppViewModel) {
+fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
+    val context = LocalContext.current
     val busy by vm.busy.collectAsState()
-    val storedKey by vm.apiKey.collectAsState()
     val tree by vm.tree.collectAsState()
-    var key by remember(storedKey) { mutableStateOf(storedKey) }
+    val endpoints by vm.endpoints.collectAsState()
+    val textModel by vm.textModel.collectAsState()
+    val visionModel by vm.visionModel.collectAsState()
+    val textEndpoint by vm.textEndpoint.collectAsState()
+    val visionEndpoint by vm.visionEndpoint.collectAsState()
+    val update by vm.updateResult.collectAsState()
+
+    var editing by remember { mutableStateOf<ApiEndpoint?>(null) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         BusyBar(busy)
-        SectionCard("模型接入") {
-            OutlinedTextField(
-                value = key,
-                onValueChange = { key = it },
-                label = { Text("API Key") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            )
-            Button(onClick = { vm.setApiKey(key.trim()) }, modifier = Modifier.padding(top = 8.dp)) {
-                Text("保存")
-            }
+
+        SectionCard("视觉模型（识别用）") {
             Text(
-                "识别、标注、报告生成需要联网，其余功能全部离线可用。",
-                style = MaterialTheme.typography.labelSmall,
+                "拍照识别题号、题干、括号提示词、选项版式走这个模型。Flash 系列免费，" +
+                    "录入频率是系统生命线，识别不该按次心疼。",
+                style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),
             )
+            SlotConfig(
+                endpoints = endpoints,
+                selectedEndpoint = visionEndpoint,
+                modelId = visionModel,
+                vision = true,
+                onEndpoint = vm::setVisionEndpoint,
+                onModel = vm::setVisionModel,
+                ready = vm.endpointReady(visionEndpoint),
+                onTest = { ep -> vm.testEndpoint(ep, visionModel) },
+                endpointOf = vm::endpointOf,
+            )
         }
+
+        SectionCard("文本模型（判断用）") {
+            Text(
+                "考点树生成、标注、抽检、报告叙述走这个模型。标注质量直接决定聚合是否可信，" +
+                    "这一档不建议为省钱降配。",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            SlotConfig(
+                endpoints = endpoints,
+                selectedEndpoint = textEndpoint,
+                modelId = textModel,
+                vision = false,
+                onEndpoint = vm::setTextEndpoint,
+                onModel = vm::setTextModel,
+                ready = vm.endpointReady(textEndpoint),
+                onTest = { ep -> vm.testEndpoint(ep, textModel) },
+                endpointOf = vm::endpointOf,
+            )
+        }
+
+        SectionCard("API 端点") {
+            Text(
+                "任何说 OpenAI 兼容或 Anthropic Messages 协议的服务都能接：" +
+                    "GLM、Kimi、MiniMax、海内外中转站。地址随便粘，会自动补全成完整请求路径。",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            endpoints.forEach { ep ->
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(ep.name, style = MaterialTheme.typography.titleSmall)
+                    Badge(ep.protocol.label, MaterialTheme.colorScheme.primary)
+                    if (ep.builtIn) Badge("预置", MaterialTheme.colorScheme.secondary)
+                    if (!ep.configured) Badge("缺 Key", MaterialTheme.colorScheme.error)
+                }
+                Text(
+                    ep.url.ifBlank { "未填地址" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+                if (ep.note.isNotBlank()) {
+                    Text(ep.note, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary)
+                }
+                Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { editing = ep }) { Text("编辑") }
+                    if (!ep.builtIn) {
+                        TextButton(onClick = { vm.deleteEndpoint(ep.id) }) { Text("删除") }
+                    }
+                }
+            }
+            Button(
+                onClick = {
+                    editing = ApiEndpoint(
+                        id = "custom_${System.currentTimeMillis()}",
+                        name = "",
+                        baseUrl = "",
+                        protocol = Protocol.OPENAI,
+                    )
+                },
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+            ) { Text("新增端点") }
+        }
+
+        SectionCard("提示词") {
+            Text(
+                "模型判断得准不准，一半取决于提示词。九段全部可看、可改、可还原；" +
+                    "输出结构那部分锁定，改不坏解析。",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            OutlinedButton(
+                onClick = { nav.navigate(Routes.PROMPTS) },
+                modifier = Modifier.padding(top = 8.dp),
+            ) { Text("查看与编辑提示词") }
+        }
+
         SectionCard("考点树") {
             Text(
                 tree?.let { "${it.version} · ${it.liveNodes.size} 个末端节点" } ?: "尚未生成",
@@ -64,6 +173,221 @@ fun SettingsScreen(vm: AppViewModel) {
                 Text(if (tree == null) "生成考点树" else "重新生成（会换版本）")
             }
         }
+
+        SectionCard("检查更新") {
+            Text(
+                "当前版本 ${vm.installedVersion}",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            Button(onClick = { vm.checkUpdate() }, modifier = Modifier.padding(top = 8.dp)) {
+                Text("检查更新")
+            }
+            update?.let { result ->
+                when {
+                    result.error != null -> Text(
+                        result.error!!,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+
+                    result.hasUpdate && result.release != null -> {
+                        val release = result.release!!
+                        Text(
+                            "有新版本 ${release.tagName}",
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                        if (release.notes.isNotBlank()) {
+                            Text(
+                                release.notes.lines().take(12).joinToString("\n"),
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                        }
+                        val link = release.apkUrl ?: release.pageUrl
+                        if (link != null) {
+                            Button(
+                                onClick = {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
+                                },
+                                modifier = Modifier.padding(top = 8.dp),
+                            ) { Text(if (release.apkUrl != null) "去下载 APK" else "打开发布页") }
+                        }
+                    }
+
+                    else -> Text(
+                        "已是最新（${result.release?.tagName ?: result.installed}）",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            }
+        }
+
+        SectionCard("联网范围") {
+            Text(
+                "识别、标注、报告生成、树生成与维护需要联网。录入、列表、倒推表、聚合数字、" +
+                    "导出与备份全部离线可用。",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
         MessageBar(vm)
     }
+
+    editing?.let { ep ->
+        EndpointDialog(
+            endpoint = ep,
+            onDismiss = { editing = null },
+            onSave = { vm.saveEndpoint(it); editing = null },
+        )
+    }
+}
+
+/** 一个档位 = 端点 + 模型 ID。两段都自由，清单只是建议值。 */
+@Composable
+private fun SlotConfig(
+    endpoints: List<ApiEndpoint>,
+    selectedEndpoint: String,
+    modelId: String,
+    vision: Boolean,
+    onEndpoint: (String) -> Unit,
+    onModel: (String) -> Unit,
+    ready: Boolean,
+    onTest: (ApiEndpoint) -> Unit,
+    endpointOf: (String) -> ApiEndpoint?,
+) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        endpoints.forEach { ep ->
+            FilterChip(
+                selected = selectedEndpoint == ep.id,
+                onClick = { onEndpoint(ep.id) },
+                label = { Text(ep.name) },
+            )
+        }
+    }
+
+    val suggestions = ModelCatalog.suggestionsFor(selectedEndpoint, vision)
+    if (suggestions.isNotEmpty()) {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            suggestions.forEach { spec ->
+                FilterChip(
+                    selected = modelId == spec.id,
+                    onClick = { onModel(spec.id) },
+                    label = { Text(spec.label + if (spec.note.isNotBlank()) "·${spec.note}" else "") },
+                )
+            }
+        }
+    }
+
+    var text by remember(modelId) { mutableStateOf(modelId) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { text = it },
+        label = { Text("模型 ID") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+    )
+    Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = { onModel(text.trim()) },
+            enabled = text.isNotBlank() && text.trim() != modelId,
+        ) { Text("使用这个 ID") }
+        endpointOf(selectedEndpoint)?.let { ep ->
+            OutlinedButton(onClick = { onTest(ep) }, enabled = ready) { Text("测试连接") }
+        }
+    }
+    if (!ready) {
+        Text(
+            "该端点还缺地址或 Key",
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun EndpointDialog(
+    endpoint: ApiEndpoint,
+    onDismiss: () -> Unit,
+    onSave: (ApiEndpoint) -> Unit,
+) {
+    var name by remember { mutableStateOf(endpoint.name) }
+    var baseUrl by remember { mutableStateOf(endpoint.baseUrl) }
+    var apiKey by remember { mutableStateOf(endpoint.apiKey) }
+    var protocol by remember { mutableStateOf(endpoint.protocol) }
+
+    val preview = ApiEndpoint(endpoint.id, name, baseUrl, protocol).url
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (endpoint.name.isBlank()) "新增端点" else endpoint.name) },
+        text = {
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("名称") },
+                    singleLine = true,
+                    enabled = !endpoint.builtIn,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+                OutlinedTextField(
+                    value = baseUrl,
+                    onValueChange = { baseUrl = it },
+                    label = { Text("地址") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+                Text(
+                    "实际请求 ${preview.ifBlank { "—" }}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Protocol.entries.forEach { p ->
+                        FilterChip(
+                            selected = protocol == p,
+                            onClick = { protocol = p },
+                            label = { Text(p.label) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = { apiKey = it },
+                    label = { Text("API Key") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onSave(
+                        endpoint.copy(
+                            name = name.trim().ifBlank { "未命名端点" },
+                            baseUrl = baseUrl.trim(),
+                            apiKey = apiKey.trim(),
+                            protocol = protocol,
+                        )
+                    )
+                },
+                enabled = baseUrl.isNotBlank(),
+            ) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }

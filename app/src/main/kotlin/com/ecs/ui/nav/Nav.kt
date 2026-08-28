@@ -30,6 +30,7 @@ import com.ecs.ui.screen.ListScreen
 import com.ecs.ui.screen.MacroScreen
 import com.ecs.ui.screen.MaintenanceScreen
 import com.ecs.ui.screen.MicroScreen
+import com.ecs.ui.screen.PromptScreen
 import com.ecs.ui.screen.ReverseTableScreen
 import com.ecs.ui.screen.SettingsScreen
 
@@ -44,6 +45,7 @@ object Routes {
     const val MAINTENANCE = "maintenance"
     const val EXPORT = "export"
     const val SETTINGS = "settings"
+    const val PROMPTS = "prompts"
 }
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
@@ -90,7 +92,8 @@ fun EcsNavHost(vm: AppViewModel, nav: NavHostController = rememberNavController(
             composable(Routes.MACRO) { MacroScreen(vm) }
             composable(Routes.MAINTENANCE) { MaintenanceScreen(vm) }
             composable(Routes.EXPORT) { ExportScreen(vm) }
-            composable(Routes.SETTINGS) { SettingsScreen(vm) }
+            composable(Routes.SETTINGS) { SettingsScreen(vm, nav) }
+            composable(Routes.PROMPTS) { PromptScreen(vm) }
         }
     }
 }
