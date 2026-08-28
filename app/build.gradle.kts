@@ -6,6 +6,16 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+/**
+ * 版本号由 CI 从 tag 注入：-PversionName=1.2.3 -PversionCode=17。
+ * 本地构建时退回默认值，不需要改文件。
+ */
+val appVersionName: String = (findProperty("versionName") as String?)?.takeIf { it.isNotBlank() } ?: "2.1.0"
+val appVersionCode: Int = (findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
+
+/** 有签名密钥就正式签名，没有就用 debug 密钥——保证产物永远可安装。 */
+val keystorePath: String? = System.getenv("KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
+
 android {
     namespace = "com.ecs"
     compileSdk = 34
@@ -14,15 +24,31 @@ android {
         applicationId = "com.ecs"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "2.1"
+        versionCode = appVersionCode
+        versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        create("release") {
+            if (keystorePath != null) {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = if (keystorePath != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

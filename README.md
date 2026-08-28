@@ -44,11 +44,36 @@ logic-tests/              独立 JVM 构建：编译 core/ 与 agent/ 并跑单�
 算法层可以脱离 Android SDK 单独验证：
 
 ```bash
-cd logic-tests && gradle test      # 66 个用例
+./gradlew -p logic-tests test      # 66 个用例
 ```
 
-`logic-tests` 把 `app/src/main/kotlin/com/ecs/core` 与 `.../agent` 作为源目录直接编译，
-不是副本，改一处两边同步。
+`logic-tests` 是独立构建，把 `app/src/main/kotlin/com/ecs/core` 与 `.../agent`
+作为源目录直接编译，不是副本，改一处两边同步。
+
+## CI 与发版
+
+`.github/workflows/ci.yml` —— 每次 push 与 PR：跑算法层 66 个用例，构建 debug APK，
+两者都作为 artifact 上传。算法层那个 job 不需要 Android SDK，几十秒出结果。
+
+`.github/workflows/release.yml` —— 打 `v*` tag 触发（也可手动 `workflow_dispatch` 传版本号）：
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+流程是：跑测试 → 构建 release APK → 建 GitHub Release 并附上 `ecs-<版本>.apk`。
+`versionName` 取自 tag，`versionCode` 取自 workflow 的 run number，都用 `-P` 注入，
+不需要改 `build.gradle.kts`。
+
+**签名。** 配了下面四个 secret 就正式签名，没配就用 debug 密钥——
+产物照样能装，但和正式签名的版本不能互相覆盖升级，发版说明里会写明这一点。
+
+| Secret | 内容 |
+|---|---|
+| `KEYSTORE_BASE64` | keystore 文件的 base64：`base64 -w0 release.jks` |
+| `KEYSTORE_PASSWORD` | keystore 口令 |
+| `KEY_ALIAS` | 密钥别名 |
+| `KEY_PASSWORD` | 密钥口令 |
 
 ## 关键实现取舍
 
