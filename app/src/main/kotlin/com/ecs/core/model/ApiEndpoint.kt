@@ -76,6 +76,36 @@ private val VERSION_SEGMENT = Regex("^v\\d+$", RegexOption.IGNORE_CASE)
 private fun hasVersionSegment(url: String): Boolean =
     VERSION_SEGMENT.matches(url.substringAfterLast('/'))
 
+/** 当前档位在用的端点，配上它承担的角色。 */
+data class ActiveSlot(val endpoint: ApiEndpoint, val roles: List<String>) {
+    val label: String get() = roles.joinToString(" / ")
+    val configured: Boolean get() = endpoint.configured
+}
+
+const val ROLE_VISION = "视觉"
+const val ROLE_TEXT = "文本"
+
+/**
+ * 真正在用的端点：视觉档 + 文本档，去重，视觉在前。
+ *
+ * 预置了四个端点，但生效的只有选中的这两个。设置页顶部只列它们——
+ * 让新用户一眼看到该填哪个 Key，而不是面对四个不知道从哪下手。
+ * 两档选同一个端点时合并成一条，免得同一个 Key 在页面上出现两次。
+ */
+fun activeEndpoints(
+    endpoints: List<ApiEndpoint>,
+    visionId: String,
+    textId: String,
+): List<ActiveSlot> {
+    val byId = endpoints.associateBy { it.id }
+    val out = LinkedHashMap<String, MutableList<String>>()
+    // 视觉在前：录入是第一步，识别先跑起来
+    listOf(visionId to ROLE_VISION, textId to ROLE_TEXT).forEach { (id, role) ->
+        if (byId.containsKey(id)) out.getOrPut(id) { mutableListOf() }.add(role)
+    }
+    return out.map { (id, roles) -> ActiveSlot(byId.getValue(id), roles) }
+}
+
 /** 预置端点。URL 也可改——写错了在应用里改一行，不必等发版。 */
 object BuiltInEndpoints {
 
