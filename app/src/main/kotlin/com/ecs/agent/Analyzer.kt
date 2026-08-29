@@ -36,6 +36,8 @@ class Analyzer(
         val basis: String,
         val formContext: String?,
         val unmatched: Boolean,
+        /** 模型原样给的 branch。归不进去时要把它引回去，否则它多半原样再给一遍。 */
+        val rawBranch: String = "",
     )
 
     class EmptyResult(message: String) : Exception(message)
@@ -54,15 +56,17 @@ class Analyzer(
         var last: Output? = null
         repeat(2) { attempt ->
             val raw = client.complete(
-                system = systemPrompt(input.options.isNotEmpty()) + retryHint(attempt),
+                system = systemPrompt(input.options.isNotEmpty()) + retryHint(last),
                 user = user,
                 maxTokens = 1024,
                 temperature = if (attempt == 0) 0.0 else 0.3,
             )
             val out = parse(raw)
             last = out
-            // 依据写砸了整条数据就没法用，值得再要一次；归不进板块则不必重试
-            if (Validation.checkBasis(out.basis).isEmpty() &&
+            // 归不进板块的这条题在复习页无处可去，等于白分析——值得再要一次。
+            // 依据写砸了同理：整条数据就没法用了。
+            if (!out.unmatched &&
+                Validation.checkBasis(out.basis).isEmpty() &&
                 Validation.checkFormContext(out.formContext).isEmpty()
             ) {
                 return out
@@ -86,6 +90,7 @@ class Analyzer(
             basis = str("basis"),
             formContext = str("context").takeIf { it.isNotBlank() },
             unmatched = branch == null,
+            rawBranch = branchRaw,
         )
     }
 
@@ -102,8 +107,21 @@ class Analyzer(
         return if (hasOptions) base + "\n\n" + prompts.text(PromptSlot.ANALYZE_CHOICE) else base
     }
 
-    private fun retryHint(attempt: Int) =
-        if (attempt == 0) "" else
-            "\n\n上一次的 basis 不合格（长度越界或含禁用词）。重写，严格 " +
-                "${Validation.BASIS_MIN}-${Validation.BASIS_MAX} 字，只写客观特征。"
+    /** 重试时说清上一次错在哪，否则它多半会原样再给一遍。 */
+    private fun retryHint(last: Output?): String {
+        if (last == null) return ""
+        val problems = buildList {
+            if (last.unmatched) {
+                add("branch「${last.rawBranch.ifBlank { "空" }}」不在板块清单里。必须从清单中原样抄一条，一字不差")
+            }
+            if (Validation.checkBasis(last.basis).isNotEmpty()) {
+                add("basis 不合格（长度越界或含禁用词），严格 ${Validation.BASIS_MIN}-${Validation.BASIS_MAX} 字，只写客观特征")
+            }
+            if (Validation.checkFormContext(last.formContext).isNotEmpty()) {
+                add("context 超过 ${Validation.FORM_CONTEXT_MAX} 字，写不下就留空")
+            }
+        }
+        if (problems.isEmpty()) return ""
+        return "\n\n上一次的输出有问题，重写：\n" + problems.joinToString("\n") { "- $it" }
+    }
 }

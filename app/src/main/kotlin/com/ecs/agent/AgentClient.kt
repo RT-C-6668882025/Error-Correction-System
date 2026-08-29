@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit
  * 两种协议：Anthropic Messages 与 OpenAI 兼容（智谱 GLM）。
  * 差异只在请求体与取值路径上，上层任务感知不到。
  */
-class AgentClient(
+open class AgentClient(
     private val resolver: suspend (Role) -> Config,
 ) {
 
@@ -56,7 +56,8 @@ class AgentClient(
 
     data class Image(val mediaType: String, val base64: String)
 
-    suspend fun complete(
+    /** open 是为了测试能脱网替换掉这一层，正式路径不覆盖它。 */
+    open suspend fun complete(
         system: String,
         user: String,
         images: List<Image> = emptyList(),

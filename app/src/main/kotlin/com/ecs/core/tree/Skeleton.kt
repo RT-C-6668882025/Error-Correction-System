@@ -55,12 +55,29 @@ object Skeleton {
     /** 大类 → 该类下的中类。 */
     fun branchesOf(root: String): List<Branch> = BRANCHES.filter { it.root == root }
 
-    /** 精确匹配 `大类/中类`；对不上返回 null。 */
+    /**
+     * 匹配 `大类/中类`。
+     *
+     * 逐字相等太脆：模型给「词法 / 名词」「词法／名词」「　词法/名词　」的时候，
+     * 它其实答对了，判成未归类是我们的问题不是它的。所以每一段单独 trim、
+     * 全角斜杠归一；只给了中类（「名词」）也认——十九个中类互不重名，
+     * 唯一匹配是安全的。真的对不上才返回 null，不猜一个最像的。
+     */
     fun branchOf(path: String?): Branch? {
+        val parts = segments(path) ?: return null
+        // 前两段命中骨架：正常情况
+        if (parts.size >= 2) {
+            BRANCHES.firstOrNull { it.root == parts[0] && it.mid == parts[1] }?.let { return it }
+        }
+        // 只给了中类，或大类写歪了：按中类唯一匹配兜一次
+        return parts.firstNotNullOfOrNull { seg -> BRANCHES.filter { it.mid == seg }.singleOrNull() }
+    }
+
+    /** 归一化后的路径分段：全角斜杠归一、逐段 trim、丢掉空段。 */
+    private fun segments(path: String?): List<String>? {
         if (path.isNullOrBlank()) return null
-        val parts = path.trim().trim('/').split("/")
-        if (parts.size < 2) return null
-        return BRANCHES.firstOrNull { it.root == parts[0] && it.mid == parts[1] }
+        val parts = path.replace('／', '/').split("/").map { it.trim() }.filter { it.isNotEmpty() }
+        return parts.ifEmpty { null }
     }
 
     fun isBranch(path: String?): Boolean = branchOf(path) != null

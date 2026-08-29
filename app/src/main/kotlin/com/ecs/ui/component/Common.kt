@@ -69,16 +69,29 @@ fun MarkdownBlock(text: String, modifier: Modifier = Modifier) {
     )
 }
 
-/** 提示条。原先挂在首页文件里，首页删了之后提到公共组件。 */
+/**
+ * 提示条。
+ *
+ * 注意摆放位置：它必须排在一个**没有吃满高度**的兄弟组件旁边。
+ * 之前原题页和复习页是 `Column { …; LazyColumn(fillMaxSize()); MessageBar() }`，
+ * LazyColumn 把剩余高度全占了，这条提示的高度是 0——所有的成功与失败都说给了空气。
+ * 现在那两处的 LazyColumn 用 `weight(1f)`。
+ */
 @Composable
 fun MessageBar(vm: com.ecs.ui.AppViewModel) {
     val message by vm.message.collectAsState()
-    if (message != null) {
-        SectionCard("提示") {
-            Text(message!!, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
-            OutlinedButton(onClick = { vm.dismissMessage() }, modifier = Modifier.padding(top = 8.dp)) {
-                Text("知道了")
-            }
+    val bad by vm.messageBad.collectAsState()
+    val text = message ?: return
+
+    SectionCard(if (bad) "出问题了" else "提示") {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (bad) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        OutlinedButton(onClick = { vm.dismissMessage() }, modifier = Modifier.padding(top = 8.dp)) {
+            Text("知道了")
         }
     }
 }

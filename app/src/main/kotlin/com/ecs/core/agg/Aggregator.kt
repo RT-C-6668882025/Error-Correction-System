@@ -34,6 +34,19 @@ object Aggregator {
     fun analyzed(records: List<ErrorRecord>): List<ErrorRecord> =
         records.filter { it.analyzed() && Skeleton.isBranch(it.branch) }
 
+    /**
+     * 「还没跑过分析」和「跑过了但没归进板块」是两回事，页面上要分开说。
+     *
+     * 两者混成一个「待分析」，人会以为分析没跑；实际是跑了、答案形式也有，
+     * 只是模型给的 branch 落在十九支之外，于是复习页一片空白而没人知道为什么。
+     */
+    fun notAnalyzed(records: List<ErrorRecord>): List<ErrorRecord> =
+        records.filter { it.formShape.isNullOrBlank() }
+
+    fun unclassified(records: List<ErrorRecord>): List<ErrorRecord> =
+        records.filter { !it.formShape.isNullOrBlank() && !Skeleton.isBranch(it.branch) }
+
+    /** 进不了板块的全部：待分析 + 未归类。 */
     fun pending(records: List<ErrorRecord>): List<ErrorRecord> =
         records.filterNot { it.analyzed() && Skeleton.isBranch(it.branch) }
 

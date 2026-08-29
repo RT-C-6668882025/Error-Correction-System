@@ -8,10 +8,31 @@ import com.ecs.core.model.ApiEndpoint
 import com.ecs.core.model.Protocol
 import com.ecs.core.tree.Skeleton
 import com.ecs.core.tree.TopLevel
+import kotlinx.coroutines.runBlocking
 import kotlin.test.*
 
 private val client =
     AgentClient { AgentClient.Config(ApiEndpoint("x", "x", "https://x.com", Protocol.OPENAI), "m") }
+
+/** 按脚本依次返回预设回复；用完就一直返回最后一条。记下每次的 system 供断言。 */
+private class Scripted(private vararg val replies: String) :
+    AgentClient({ AgentClient.Config(ApiEndpoint("x", "x", "https://x.com", Protocol.OPENAI), "m") }) {
+
+    val systems = mutableListOf<String>()
+    val calls: Int get() = systems.size
+
+    override suspend fun complete(
+        system: String,
+        user: String,
+        images: List<Image>,
+        maxTokens: Int,
+        temperature: Double,
+        role: Role,
+    ): String {
+        systems += system
+        return replies[minOf(systems.size - 1, replies.size - 1)]
+    }
+}
 
 class SkeletonTest {
 
@@ -37,8 +58,11 @@ class SkeletonTest {
     }
 
     @Test fun `subject-verb agreement lives under grammar, not syntax`() {
-        assertNotNull(Skeleton.branchOf("语法/主谓一致"))
-        assertNull(Skeleton.branchOf("句法/主谓一致"))
+        assertEquals("语法/主谓一致", Skeleton.branchOf("语法/主谓一致")?.path)
+        assertTrue(Skeleton.branchesOf(TopLevel.GRAMMAR).any { it.mid == "主谓一致" })
+        assertTrue(Skeleton.branchesOf(TopLevel.SYNTAX).none { it.mid == "主谓一致" })
+        // 模型把大类写成句法时按中类救回来，落点仍是语法那一支
+        assertEquals("语法/主谓一致", Skeleton.branchOf("句法/主谓一致")?.path)
     }
 
     @Test fun `branchOf matches on the first two segments`() {
@@ -50,10 +74,41 @@ class SkeletonTest {
     @Test fun `invented mids and roots are rejected`() {
         assertNull(Skeleton.branchOf("语法/语篇衔接"))
         assertNull(Skeleton.branchOf("修辞/比喻/明喻"))
-        assertNull(Skeleton.branchOf("语法"))
         assertNull(Skeleton.branchOf(""))
         assertNull(Skeleton.branchOf(null))
+        assertNull(Skeleton.branchOf("   /   "))
         assertFalse(Skeleton.isBranch("unmatched"))
+    }
+
+    @Test fun `spacing and full-width slashes do not cost a match`() {
+        // 模型这几种写法其实都答对了，判成未归类是我们的问题不是它的
+        listOf(
+            "词法 / 名词",
+            "　词法/名词　",
+            "词法／名词",
+            "/词法/名词/",
+            "词法/ 名词 /后缀转换",
+        ).forEach {
+            assertEquals("词法/名词", Skeleton.branchOf(it)?.path, "「$it」没归到词法/名词")
+        }
+    }
+
+    @Test fun `a bare mid resolves because the nineteen mids are unique`() {
+        assertEquals("词法/名词", Skeleton.branchOf("名词")?.path)
+        assertEquals("语法/非谓语动词", Skeleton.branchOf("非谓语动词")?.path)
+        // 大类写歪了但中类对，也能救回来
+        assertEquals("语法/时态", Skeleton.branchOf("句法/时态")?.path)
+    }
+
+    @Test fun `the nineteen mids really are unique - the bare-mid rescue depends on it`() {
+        val mids = Skeleton.BRANCHES.map { it.mid }
+        assertEquals(mids.size, mids.distinct().size)
+    }
+
+    @Test fun `a root on its own is not enough to pick a branch`() {
+        // 「语法」下面有七支，猜哪一支都是错的
+        assertNull(Skeleton.branchOf("语法"))
+        assertNull(Skeleton.branchOf("词法"))
     }
 
     @Test fun `the listing shown to the model covers every branch with its scope`() {
@@ -111,6 +166,39 @@ class AnalyzerParseTest {
     @Test fun `an empty context becomes null rather than an empty string`() {
         val out = analyzer.parse("""{"branch":"词法/名词","form":"名词","context":"  "}""")
         assertNull(out.formContext)
+    }
+
+    @Test fun `an unmatched branch is retried, and the second answer sticks`() = runBlocking {
+        // 归不进板块的题在复习页无处可去，等于白分析——所以必须再要一次
+        val client = Scripted(
+            """{"branch":"名词用法","form":"名词，动词加 -tion 后缀","basis":"空前有 the，空后接 of 短语"}""",
+            """{"branch":"词法/名词","form":"名词，动词加 -tion 后缀","basis":"空前有 the，空后接 of 短语"}""",
+        )
+        val out = Analyzer(client).analyze(Analyzer.Input("The ___ of AI", "develop", "development"))
+        assertEquals("词法/名词", out.branch)
+        assertFalse(out.unmatched)
+        assertEquals(2, client.calls)
+        // 第二次必须把上次错在哪说清楚，否则它多半原样再给一遍
+        assertTrue(client.systems[1].contains("名词用法"))
+        assertTrue(client.systems[1].contains("不在板块清单里"))
+    }
+
+    @Test fun `two bad answers in a row end as unmatched, not as a crash`() = runBlocking {
+        val client = Scripted("""{"branch":"瞎编","form":"名词"}""")
+        val out = Analyzer(client).analyze(Analyzer.Input("The ___ of AI", null, null))
+        assertTrue(out.unmatched)
+        assertNull(out.branch)
+        assertEquals("名词", out.formShape)
+        assertEquals(2, client.calls)
+    }
+
+    @Test fun `a good first answer is not retried`() = runBlocking {
+        val client = Scripted(
+            """{"branch":"语法/时态","form":"一般过去时","basis":"句末有 last year 这个时间状语"}"""
+        )
+        val out = Analyzer(client).analyze(Analyzer.Input("He ___ last year", "go", "went"))
+        assertEquals("语法/时态", out.branch)
+        assertEquals(1, client.calls)
     }
 
     @Test fun `apply touches the analysis half only`() {

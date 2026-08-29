@@ -109,6 +109,20 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
             }
         }
 
+        SectionCard("提示词") {
+            Text(
+                "分析、小方向、大方向三级各一段，判断得准不准一半取决于它们。" +
+                    "全部可看、可改、可还原；输出结构那部分锁定，改不坏解析。" +
+                    "顶栏那个滑块图标在每一页都能直接进去。",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            OutlinedButton(
+                onClick = { nav.navigate(Routes.PROMPTS) },
+                modifier = Modifier.padding(top = 8.dp),
+            ) { Text("查看与编辑提示词") }
+        }
+
         SectionCard("视觉模型（识别用）") {
             Text(
                 "拍照识别题号、题干、括号提示词、选项版式走这个模型。Flash 系列免费，" +
@@ -196,19 +210,6 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
                 },
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
             ) { Text("新增端点") }
-        }
-
-        SectionCard("提示词") {
-            Text(
-                "模型判断得准不准，一半取决于提示词。九段全部可看、可改、可还原；" +
-                    "输出结构那部分锁定，改不坏解析。",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 6.dp),
-            )
-            OutlinedButton(
-                onClick = { nav.navigate(Routes.PROMPTS) },
-                modifier = Modifier.padding(top = 8.dp),
-            ) { Text("查看与编辑提示词") }
         }
 
         SectionCard("板块与方向") {

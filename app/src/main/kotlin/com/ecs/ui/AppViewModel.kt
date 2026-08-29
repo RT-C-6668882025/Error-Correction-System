@@ -54,6 +54,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
+    /**
+     * 这条消息是不是坏消息，决定它标不标红。
+     *
+     * 「已录入 12 条，分析 12 条」和「已录入 12 条，分析 0 条；失败 12 条：未配置 API Key」
+     * 现在长得一模一样，后者会被当成前者一眼扫过去。
+     *
+     * 每次动作开始时清掉，只有失败路径把它置上——所以不会有残留的红。
+     */
+    private val _messageBad = MutableStateFlow(false)
+    val messageBad: StateFlow<Boolean> = _messageBad.asStateFlow()
+
     private val _endpoints = MutableStateFlow(BuiltInEndpoints.ALL)
     val endpoints: StateFlow<List<ApiEndpoint>> = _endpoints.asStateFlow()
 
@@ -110,16 +121,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _keyLocked.value = runCatching { s.keyLocked.first() }.getOrDefault(false)
     }
 
-    fun dismissMessage() { _message.value = null }
+    fun dismissMessage() {
+        _message.value = null
+        _messageBad.value = false
+    }
 
     private fun run(label: String, block: suspend () -> Unit) {
-        if (_busy.value != null) return
+        // 一次只跑一件事。但「点了没反应」也是一种坏体验，所以要说一声
+        _busy.value?.let {
+            _message.value = "正在$it　等它结束再点"
+            return
+        }
         viewModelScope.launch {
             _busy.value = label
+            _messageBad.value = false
             try {
                 block()
             } catch (e: Exception) {
                 _message.value = e.message ?: e.toString()
+                _messageBad.value = true
             } finally {
                 _busy.value = null
             }
@@ -268,6 +288,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 if (r.unmatched > 0) append("；$unmatchedHint${r.unmatched} 条")
                 if (r.failed > 0) append("；失败 ${r.failed} 条：${r.firstError}")
             }
+            _messageBad.value = r.failed > 0 || r.done == 0
         } else {
             _message.value = "已录入 ${result.inserted} 条" +
                 if (stripped > 0) "；剥离选择题 $stripped 道" else ""
@@ -343,9 +364,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val r = analyzeEach(pending, onProgress = { i, n -> _busy.value = "分析中　$i/$n" })
         _message.value = buildString {
             append("分析 ${r.done} 条")
-            if (r.unmatched > 0) append("；$unmatchedHint${r.unmatched} 条")
+            if (r.unmatched > 0) append("；$unmatchedHint${r.unmatched} 条，去掉「只看待分析」能筛出来重跑")
             if (r.failed > 0) append("；失败 ${r.failed} 条：${r.firstError}")
         }
+        // 一条都没归进板块，等于复习页还是空的——这是坏消息
+        _messageBad.value = r.failed > 0 || r.done == 0
     }
 
     // ---------- 功能二：递归式复习 ----------
@@ -385,6 +408,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         _message.value = "汇总 $done 个板块" + if (failed > 0) "；失败 $failed 个：$firstError" else ""
+        _messageBad.value = failed > 0 || done == 0
     }
 
     /**
@@ -412,8 +436,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun delete(uid: String) = run("删除中…") { repo.delete(uid) }
 
-    /** 还没分析的条数，原题页顶部用它提示还有多少要处理。 */
-    fun pending(): Int = records.value.count { !it.analyzed() }
+    /**
+     * 原题页顶部的三个数。
+     *
+     * 「还没跑过分析」和「跑过了但没归进板块」必须分开：混成一个数字，
+     * 人会以为分析没跑，而真相是跑了、答案形式也有，只是 branch 落在十九支之外，
+     * 于是复习页一片空白而没人知道为什么。
+     */
+    fun pending(): Int = Aggregator.notAnalyzed(records.value).size
+
+    fun unclassified(): Int = Aggregator.unclassified(records.value).size
+
+    fun analyzedCount(): Int = Aggregator.analyzed(records.value).size
 
     // ---------- 导出 ----------
 
