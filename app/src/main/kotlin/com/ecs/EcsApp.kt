@@ -2,11 +2,10 @@ package com.ecs
 
 import android.app.Application
 import com.ecs.agent.AgentClient
-import com.ecs.agent.Annotator
+import com.ecs.agent.Analyzer
+import com.ecs.agent.DirectionBuilder
 import com.ecs.agent.PaperScanner
 import com.ecs.agent.PromptProvider
-import com.ecs.agent.Reporter
-import com.ecs.agent.TreeGenerator
 import com.ecs.core.model.ApiEndpoint
 import com.ecs.core.model.BuiltInEndpoints
 import com.ecs.core.model.Protocol
@@ -15,7 +14,7 @@ import com.ecs.data.db.AppDatabase
 import com.ecs.data.repo.PromptStore
 import com.ecs.data.repo.RecordRepository
 import com.ecs.data.repo.Settings
-import com.ecs.data.repo.TreeStore
+import com.ecs.data.repo.DirectionStore
 import com.ecs.data.update.UpdateChecker
 import kotlinx.coroutines.flow.first
 
@@ -32,14 +31,14 @@ class EcsApp : Application() {
 /** 手写 DI：依赖不多，一个容器比引一套框架划算。 */
 class Container(app: Application) {
     val settings = Settings(app)
-    val treeStore = TreeStore(app)
+    val directionStore = DirectionStore(app)
     val promptStore = PromptStore(app)
     val updateChecker = UpdateChecker(app)
     private val backup = BackupManager(app)
 
     val repository = RecordRepository(
         dao = AppDatabase.get(app).records(),
-        treeStore = treeStore,
+        directionStore = directionStore,
         settings = settings,
         backup = backup,
     )
@@ -66,8 +65,7 @@ class Container(app: Application) {
             protocol = Protocol.OPENAI,
         )
 
-    val treeGenerator = TreeGenerator(client, prompts)
-    val annotator = Annotator(client, prompts)
-    val reporter = Reporter(client, prompts)
+    val analyzer = Analyzer(client, prompts)
+    val directionBuilder = DirectionBuilder(client, prompts)
     val scanner = PaperScanner(client, prompts)
 }

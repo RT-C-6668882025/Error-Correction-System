@@ -37,24 +37,24 @@ import com.ecs.ui.component.SectionCard
 /**
  * 原题：一切数据的来源。
  *
- * 题干和答案都能改——识别错了要能改回来，改完可以重跑标注。
+ * 题干和答案都能改——识别错了要能改回来，改完可以重跑分析。
  * 复习页看到的每一条形态，最终都追溯到这里的某一道题。
  */
 @Composable
 fun SourceScreen(vm: AppViewModel) {
     val records by vm.records.collectAsState()
     val busy by vm.busy.collectAsState()
-    var onlyUnannotated by remember { mutableStateOf(false) }
+    var onlyPending by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<ErrorRecord?>(null) }
 
-    val unannotated = vm.unannotated()
+    val pending = vm.pending()
     val filtered = records.filter { r ->
-        (!onlyUnannotated || r.kaodian.isNullOrBlank()) &&
+        (!onlyPending || !r.analyzed()) &&
             (query.isBlank() ||
                 r.stem.orEmpty().contains(query, ignoreCase = true) ||
                 r.answer.orEmpty().contains(query, ignoreCase = true) ||
-                r.kaodian.orEmpty().contains(query))
+                r.branch.orEmpty().contains(query))
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -67,14 +67,14 @@ fun SourceScreen(vm: AppViewModel) {
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                label = { Text("题干 / 答案 / 考点") },
+                label = { Text("题干 / 答案 / 板块") },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
             )
             FilterChip(
-                selected = onlyUnannotated,
-                onClick = { onlyUnannotated = !onlyUnannotated },
-                label = { Text("待标注 $unannotated") },
+                selected = onlyPending,
+                onClick = { onlyPending = !onlyPending },
+                label = { Text("待分析 $pending") },
             )
         }
         Row(
@@ -83,10 +83,10 @@ fun SourceScreen(vm: AppViewModel) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("${filtered.size} 道", style = MaterialTheme.typography.labelMedium)
-            if (unannotated > 0) {
-                // 没标注就进不了复习页；考点树没生成的话会在这一步顺带生成
-                OutlinedButton(onClick = { vm.annotateAll() }) {
-                    Text("全部标注 $unannotated 条")
+            if (pending > 0) {
+                // 没分析就进不了复习页：板块是空的，小方向也就无从汇总
+                OutlinedButton(onClick = { vm.analyzeAll() }) {
+                    Text("全部分析 $pending 条")
                 }
             }
         }
@@ -103,8 +103,8 @@ fun SourceScreen(vm: AppViewModel) {
                         ) {
                             Text(r.src.paper, style = MaterialTheme.typography.labelSmall)
                             Badge("第${r.src.no}题", MaterialTheme.colorScheme.secondary)
-                            if (r.kaodian.isNullOrBlank()) {
-                                Badge("待标注", MaterialTheme.colorScheme.error)
+                            if (!r.analyzed()) {
+                                Badge("待分析", MaterialTheme.colorScheme.error)
                             }
                         }
                         Text(
@@ -116,11 +116,11 @@ fun SourceScreen(vm: AppViewModel) {
                             Text("答案　$it", style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.padding(top = 4.dp))
                         }
-                        r.formRule?.let {
+                        r.formShape?.let {
                             Text("答案形式　$it", style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary)
                         }
-                        r.kaodian?.let {
+                        r.branch?.let {
                             Text(it, style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.secondary)
                         }
@@ -136,7 +136,7 @@ fun SourceScreen(vm: AppViewModel) {
             record = record,
             onDismiss = { editing = null },
             onSave = { vm.saveRecord(it); editing = null },
-            onAnnotate = { vm.annotate(it); editing = null },
+            onAnalyze = { vm.analyze(it); editing = null },
             onDelete = { vm.delete(record.uid); editing = null },
         )
     }
@@ -147,17 +147,17 @@ private fun SourceDialog(
     record: ErrorRecord,
     onDismiss: () -> Unit,
     onSave: (ErrorRecord) -> Unit,
-    onAnnotate: (ErrorRecord) -> Unit,
+    onAnalyze: (ErrorRecord) -> Unit,
     onDelete: () -> Unit,
 ) {
     var stem by remember { mutableStateOf(record.stem.orEmpty()) }
     var answer by remember { mutableStateOf(record.answer.orEmpty()) }
-    var eye by remember { mutableStateOf(record.eye.orEmpty()) }
+    var basis by remember { mutableStateOf(record.basis.orEmpty()) }
 
     fun edited() = record.copy(
         stem = stem.ifBlank { null },
         answer = answer.ifBlank { null },
-        eye = eye.ifBlank { null },
+        basis = basis.ifBlank { null },
     )
 
     AlertDialog(
@@ -179,25 +179,25 @@ private fun SourceDialog(
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 )
                 OutlinedTextField(
-                    value = eye,
-                    onValueChange = { eye = it },
-                    label = { Text("题眼（看到什么就知道填什么）") },
+                    value = basis,
+                    onValueChange = { basis = it },
+                    label = { Text("判断依据（看到什么就知道填什么）") },
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 )
                 Text(
-                    "考点　${record.kaodian ?: "未标注"}",
+                    "板块　${record.branch ?: "未归类"}",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 8.dp),
                 )
                 Text(
-                    "答案形式　${record.formRule ?: "—"}（由考点树带出，只读）",
+                    "答案形式　${record.formShape ?: "—"}（由分析推出，重跑分析会覆盖）",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 OutlinedButton(
-                    onClick = { onAnnotate(edited()) },
+                    onClick = { onAnalyze(edited()) },
                     enabled = stem.isNotBlank(),
                     modifier = Modifier.padding(top = 8.dp),
-                ) { Text(if (record.kaodian == null) "标注" else "重新标注") }
+                ) { Text(if (record.branch == null) "分析" else "重新分析") }
             }
         },
         confirmButton = { TextButton(onClick = { onSave(edited()) }) { Text("保存") } },

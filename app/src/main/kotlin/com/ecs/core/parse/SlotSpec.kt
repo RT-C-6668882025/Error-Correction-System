@@ -1,82 +1,32 @@
 package com.ecs.core.parse
 
 import com.ecs.core.model.Confidence
-import com.ecs.core.model.Section
 
 /**
- * F1.3 错题号输入格式解析。
+ * 记录 id 与批次号。
  *
- *   语法填空： 3, 5, ?7
- *   完成句子： 12-1, 12-2, ?15-1
- *   `?` 前缀 = 蒙对
- *
- * 分隔符宽松处理：中英文逗号、顿号、空格、分号均可；中文问号等价于 `?`。
- * 语法填空天然一题一空，省略空序时补 1。
+ * 错题号不再靠手打——确认页把识别到的题逐条列出来，你在每条上标 错 / 蒙对，
+ * 标了的才入库。所以这里只剩「一个标记怎么变成 id」这一件事。
  */
 object SlotSpec {
 
-    data class Entry(val no: Int, val slot: Int, val confidence: Confidence) {
-        fun id(section: Section): String = "%s_%03d_%d".format(section.abbr, no, slot)
+    /** 确认页上的一条标记。 */
+    data class Mark(val no: Int, val slot: Int, val confidence: Confidence) {
+        val id: String get() = "%s%03d_%d".format(PREFIX, no, slot)
     }
 
-    data class Result(
-        val entries: List<Entry>,
-        val errors: List<String>,
-    ) {
-        val ok: Boolean get() = errors.isEmpty()
-        /** F1.3 实时解析预览：显示将生成几条记录。 */
-        val preview: String
-            get() = buildString {
-                append("将生成 ${entries.size} 条记录")
-                val lucky = entries.count { it.confidence == Confidence.LUCKY }
-                if (lucky > 0) append("（其中蒙对 $lucky 条）")
-                if (errors.isNotEmpty()) append(" · ${errors.size} 处无法解析")
-            }
-    }
+    /** 中性前缀：不再区分语法填空 / 完成句子。 */
+    const val PREFIX = "q_"
 
-    private val SPLIT = Regex("[,，、;；\\s]+")
-    private val TOKEN = Regex("^([?？]?)(\\d{1,3})(?:[-－—](\\d{1,2}))?$")
-
-    fun parse(input: String, section: Section): Result {
-        val entries = LinkedHashMap<Pair<Int, Int>, Entry>()
-        val errors = mutableListOf<String>()
-
-        input.trim().split(SPLIT).filter { it.isNotBlank() }.forEach { raw ->
-            val token = raw.trim()
-            val m = TOKEN.matchEntire(token)
-            if (m == null) {
-                errors += token
-                return@forEach
-            }
-            val lucky = m.groupValues[1].isNotEmpty()
-            val no = m.groupValues[2].toInt()
-            val slot = m.groupValues[3].takeIf { it.isNotEmpty() }?.toInt() ?: 1
-            if (no <= 0 || slot <= 0) {
-                errors += token
-                return@forEach
-            }
-            val key = no to slot
-            // 重复输入同一空：保留更严重的一次（错 > 蒙对）
-            val conf = if (lucky) Confidence.LUCKY else Confidence.WRONG
-            val existing = entries[key]
-            entries[key] = if (existing != null && existing.confidence == Confidence.WRONG) {
-                existing
-            } else {
-                Entry(no, slot, conf)
-            }
-        }
-        return Result(entries.values.toList(), errors)
-    }
-
-    /** id 格式校验（F1.6）。 */
-    private val ID = Regex("^(gf|wc)_(\\d{3})_(\\d+)$")
+    /** 老库里是 gf_/wc_ 前缀，仍要认得，否则历史记录会被判成非法 id。 */
+    private val ID = Regex("^(q|gf|wc)_(\\d{3})_(\\d+)$")
 
     fun isValidId(id: String): Boolean = ID.matches(id)
 
-    fun parseId(id: String): Triple<Section, Int, Int>? {
+    /** 题号与空序。前缀是什么不重要，历史前缀照样解析。 */
+    fun parseId(id: String): Pair<Int, Int>? {
         val m = ID.matchEntire(id) ?: return null
-        val section = Section.fromAbbr(m.groupValues[1]) ?: return null
-        return Triple(section, m.groupValues[2].toInt(), m.groupValues[3].toInt())
+        return m.groupValues[2].toInt() to m.groupValues[3].toInt()
     }
 
     /** 录入批次 b{两位数}。 */

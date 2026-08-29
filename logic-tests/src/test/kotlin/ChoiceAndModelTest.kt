@@ -6,8 +6,6 @@ import com.ecs.core.model.BuiltInEndpoints
 import com.ecs.core.model.ModelCatalog
 import com.ecs.core.parse.ChoiceStripper
 import com.ecs.core.rules.Validation
-import com.ecs.core.tree.KaodianTree
-import com.ecs.core.tree.TreeNode
 import kotlin.test.*
 
 class ChoiceStripperTest {
@@ -126,21 +124,21 @@ class CommonRootTest {
     }
 }
 
-class ChoiceAnnotationGuardTest {
-    @Test fun `option words are banned from eye`() {
+class ChoiceAnalysisGuardTest {
+    @Test fun `option words are banned from the basis`() {
         listOf("选项", "排除", "A项", "B项", "C项", "D项").forEach { word ->
-            val issues = Validation.checkEye("空前有 the，${word}都是名词形式")
+            val issues = Validation.checkBasis("空前有 the，${word}都是名词形式")
             assertTrue(issues.any { it.message.contains(word) }, "missing guard for $word")
         }
     }
 
-    @Test fun `a clean stem-only eye still passes`() {
-        assertTrue(Validation.checkEye("空前有 the，空后接介词短语").isEmpty())
+    @Test fun `a clean stem-only basis still passes`() {
+        assertTrue(Validation.checkBasis("空前有 the，空后接介词短语").isEmpty())
     }
 
-    @Test fun `the banned list keeps the v2_1 words too`() {
-        assertTrue(Validation.EYE_BANNED.containsAll(listOf("考查", "需要", "应该", "主要", "判断")))
-        assertTrue(Validation.EYE_BANNED.containsAll(listOf("选项", "排除", "A项")))
+    @Test fun `the banned list keeps the original words too`() {
+        assertTrue(Validation.BASIS_BANNED.containsAll(listOf("考查", "需要", "应该", "主要", "判断")))
+        assertTrue(Validation.BASIS_BANNED.containsAll(listOf("选项", "排除", "A项")))
     }
 }
 
@@ -181,23 +179,21 @@ class ScannerStrippingTest {
 
 class NoOptionsPersistedTest {
     private val record = ErrorRecord(
-        id = "gf_007_1",
-        src = Src("2023真题卷", Section.GF, 7, 1, "b01", 10),
+        id = "q_007_1",
+        src = Src("2023真题卷", 7, 1, "b01"),
+        stem = "The ___ of AI has changed everything.",
         given = "develop",
         answer = "development",
         confidence = Confidence.WRONG,
         createdAt = 1_700_000_000_000,
-        eye = "空前有 the，空后接介词短语",
-        kaodian = "词法/名词/后缀转换/-tion",
-        formRule = "名词，动词加 -tion 后缀",
-        difficulty = Difficulty.MEDIUM,
-        treeVersion = "v1",
-        status = RecordStatus.ACTIVE,
+        branch = "词法/名词",
+        formShape = "名词，动词加 -tion 后缀",
+        basis = "空前有 the，空后接介词短语",
+        status = RecordStatus.ANALYZED,
     )
 
     @Test fun `the exported record carries no option data at all`() {
-        val tree = KaodianTree("v1", listOf(TreeNode("词法/名词/后缀转换/-tion", "名词，动词加 -tion 后缀")))
-        val pkg = Exporter.build(listOf(record), tree, "20260828")
+        val pkg = Exporter.build(listOf(record), emptyList(), "20260828")
         listOf("options", "distractor", "选项", "developing", "developed").forEach {
             assertFalse(pkg.dataJson.contains(it), "data.json leaked $it")
             assertFalse(pkg.dataCsv.contains(it), "data.csv leaked $it")
@@ -205,9 +201,10 @@ class NoOptionsPersistedTest {
         assertTrue(pkg.dataJson.contains("development"))
     }
 
-    @Test fun `section stays 语法填空 - no new enum value`() {
-        assertEquals(listOf("语法填空", "完成句子"), Section.entries.map { it.label })
-        assertEquals(Section.GF, record.src.section)
+    @Test fun `a stripped choice question is just a fill-in record, with no section anywhere`() {
+        val pkg = Exporter.build(listOf(record), emptyList(), "20260828")
+        assertFalse(pkg.dataCsv.lines().first().contains("section"))
+        assertFalse(pkg.dataJson.contains("语法填空"))
     }
 }
 

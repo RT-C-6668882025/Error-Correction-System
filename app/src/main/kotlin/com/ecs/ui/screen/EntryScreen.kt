@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Tab
@@ -31,7 +30,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
-import com.ecs.core.model.Section
 import com.ecs.core.model.activeEndpoints
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.ApiKeyField
@@ -112,7 +110,6 @@ private fun KeyBar(vm: AppViewModel) {
 
 @Composable
 private fun ScanEntry(vm: AppViewModel, nav: NavHostController) {
-    var section by remember { mutableStateOf(Section.GF) }
     var picked by remember { mutableStateOf<List<Uri>>(emptyList()) }
 
     val picker = rememberLauncherForActivityResult(
@@ -121,16 +118,12 @@ private fun ScanEntry(vm: AppViewModel, nav: NavHostController) {
 
     SectionCard("拍照录入") {
         Text(
-            "识别题号、题干、括号提示词与选项版式。只识别印刷体——手写作答不识别，" +
-                "识别错会连带污染后续全部标注，作答由你直接输入错题号。",
+            "判据只有一条：一个句子、句中至少一个空。不分题型。\n" +
+                "只识别印刷体——手写作答不识别，识别错会连带污染后续全部分析。\n" +
+                "识别完在确认页逐条标错 / 蒙对，标了的才入库。",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(top = 6.dp),
         )
-        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Section.entries.forEach { s ->
-                FilterChip(selected = section == s, onClick = { section = s }, label = { Text(s.label) })
-            }
-        }
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = {
                 picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -139,7 +132,7 @@ private fun ScanEntry(vm: AppViewModel, nav: NavHostController) {
                 enabled = picked.isNotEmpty(),
                 onClick = {
                     // 压缩与编码交给 ViewModel 在 IO 线程做，这里只递 Uri
-                    vm.scan(picked, section)
+                    vm.scan(picked)
                     nav.navigate(Routes.CONFIRM)
                 },
             ) { Text("识别") }

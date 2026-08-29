@@ -45,7 +45,7 @@ object Routes {
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
 
 /**
- * 只有三个：录入把题存进来，原题是唯一数据源，复习按考点层级自下而上看。
+ * 只有三个：录入把题存进来，原题是唯一数据源，复习把分析自下而上汇总成方向。
  * 设置是一次性配置，放右上角，不占底部。
  */
 private val tabs = listOf(
