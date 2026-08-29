@@ -38,6 +38,7 @@ import com.ecs.core.model.Protocol
 import com.ecs.core.model.activeEndpoints
 import com.ecs.core.tree.Skeleton
 import com.ecs.core.tree.TopLevel
+import com.ecs.core.update.UpdateCheck
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.ApiKeyField
 import com.ecs.ui.component.Badge
@@ -242,12 +243,37 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
             }
         }
 
+        SectionCard("导出与备份") {
+            Text(
+                "导出包是这个库唯一带得走的形态：原始数据、每题的分析、已汇总的方向都在里面。" +
+                    "它存在应用私有目录，卸载会一起删掉——换手机或重装前先分享出去。",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            OutlinedButton(
+                onClick = { nav.navigate(Routes.EXPORT) },
+                modifier = Modifier.padding(top = 8.dp),
+            ) { Text("导出 / 分享备份") }
+        }
+
         SectionCard("检查更新") {
             Text(
                 "当前版本 ${vm.installedVersion}",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),
             )
+            // v4.0.1 及更早每一版的签名都是构建机现场随机生成的 debug 密钥，
+            // 互相不同，Android 拒绝跨签名覆盖安装
+            if (UpdateCheck.compareVersions(vm.installedVersion, "4.1.0") < 0) {
+                Text(
+                    "注意：你现在这一版（${vm.installedVersion}）和更早的版本签名不固定，" +
+                        "新包装不上去，必须先卸载再装。卸载会清空本地数据，先到上面导出并分享出去。" +
+                        "从 v4.1.0 起签名固定，以后可以直接覆盖。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
             Button(onClick = { vm.checkUpdate() }, modifier = Modifier.padding(top = 8.dp)) {
                 Text("检查更新")
             }

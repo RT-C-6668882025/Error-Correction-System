@@ -97,6 +97,9 @@ class RecordRepository(
 
     fun backups(): List<File> = backup.listBackups()
 
+    /** 打成一个 zip 好走系统分享——带不走的备份不叫备份。 */
+    suspend fun zipFor(dir: File): File = backup.zipFor(dir)
+
     private suspend fun maybeBackup() {
         val count = dao.count()
         val last = settings.lastBackupCount()

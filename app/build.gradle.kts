@@ -13,7 +13,14 @@ plugins {
 val appVersionName: String = (findProperty("versionName") as String?)?.takeIf { it.isNotBlank() } ?: "2.1.0"
 val appVersionCode: Int = (findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
 
-/** 有签名密钥就正式签名，没有就用 debug 密钥——保证产物永远可安装。 */
+/**
+ * 有签名密钥就正式签名，没有就退回 debug 密钥。
+ *
+ * 注意退回这条路的代价：debug keystore 是 AGP 在构建机上**现场随机生成**的，
+ * CI 每次都是全新虚拟机，于是每一版签名都不同。Android 拒绝跨签名覆盖安装，
+ * 结果就是每次升级都得先卸载、连带清空本地数据。
+ * v2.1.0 到 v4.0.1 全都踩在这上面，所以发版务必配好 KEYSTORE_BASE64。
+ */
 val keystorePath: String? = System.getenv("KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
 
 android {
