@@ -456,6 +456,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun exportNow() = run("导出中…") {
         val dir = repo.exportNow()
         refreshExports()
-        _message.value = "已导出到 ${dir.absolutePath}"
+        _message.value = "已导出 ${dir.name}。它在应用私有目录里，卸载会一起删掉——点「分享」送出去才带得走。"
+    }
+
+    /**
+     * 打包一份导出，把 zip 交给调用方去唤起系统分享。
+     *
+     * 这一步存在的理由：导出包写在 getExternalFilesDir 下，卸载即删，
+     * Android 11 之后文件管理器也不好碰。没有分享出口，等于没有备份。
+     */
+    fun shareExport(dir: File, onReady: (File) -> Unit) = run("打包中…") {
+        val zip = withContext(Dispatchers.IO) { repo.zipFor(dir) }
+        onReady(zip)
     }
 }

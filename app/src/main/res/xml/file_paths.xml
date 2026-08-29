@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    只开放缓存目录下的 share/：分享用的 zip 就在那里。
+    导出目录本身不开放——分享的是打好包的那一个文件，不是一堆散件。
+-->
+<paths>
+    <cache-path name="share" path="share/" />
+</paths>

@@ -78,24 +78,56 @@ jobs:
           echo "path=$DEST" >> "$GITHUB_OUTPUT"
           echo "sha256=$(sha256sum "$DEST" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
+      # 签名指纹要写进发版说明。Android 拒绝跨签名覆盖安装，而在此之前
+      # 没有任何地方显示过它——v2.1.0 到 v4.0.1 每一版签名都不同，
+      # 却直到用户装不上才发现。
+      - name: 读签名指纹
+        id: cert
+        run: |
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          if [ -n "$APKSIGNER" ]; then
+            FP=$("$APKSIGNER" verify --print-certs "${{ steps.apk.outputs.path }}" \
+              | grep -m1 -i 'certificate SHA-256 digest' | awk '{print $NF}')
+            echo "签名证书 SHA-256: $FP"
+            echo "fingerprint=$FP" >> "$GITHUB_OUTPUT"
+          else
+            echo "找不到 apksigner，跳过指纹"
+            echo "fingerprint=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 写发版说明
         run: |
           {
             echo "错题元数据系统 · ${{ steps.version.outputs.tag }}"
             echo
-            echo "语法填空 + 完成句子的错题字段库，Android 原生（minSdk 26）。"
+            echo "英语填空题的字段库，Android 原生（minSdk 26）。收录判据只有一条："
+            echo "一个句子、句中至少一个空。数据分三级，后一级的输入是前一级的输出："
+            echo
+            echo '    原始数据（题干 + 答案）→ 分析（每题一条）→ 小方向（每板块一棵树）→ 大方向'
             echo
             echo "- APK: \`${{ steps.apk.outputs.path }}\`"
             echo "- SHA256: \`${{ steps.apk.outputs.sha256 }}\`"
             echo "- versionCode: ${{ github.run_number }}"
-            if [ "${{ steps.signing.outputs.signed }}" != "true" ]; then
-              echo
-              echo "> 本次用 debug 密钥签名（仓库未配置 KEYSTORE_BASE64）。可直接安装，"
-              echo "> 但与正式签名的版本无法互相覆盖升级。"
+            if [ -n "${{ steps.cert.outputs.fingerprint }}" ]; then
+              echo "- 签名证书 SHA-256: \`${{ steps.cert.outputs.fingerprint }}\`"
             fi
             echo
-            echo "首次使用：设置页填 API Key → 生成考点树 → 开始录入。"
-            echo "识别、标注、报告生成需要联网，其余功能离线可用。"
+            if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+              echo "> 用固定密钥签名。只要上面的签名证书指纹和你已装版本一致，"
+              echo "> 就能直接覆盖安装，数据不丢。"
+              echo ">"
+              echo "> **从 v4.0.1 及更早版本升级需要先卸载**：那些版本每次构建都用构建机"
+              echo "> 现场随机生成的 debug 密钥，签名互不相同，Android 不允许跨签名覆盖。"
+              echo "> 卸载会清空本地数据，先在 设置 → 导出与备份 里导出并分享出去。"
+            else
+              echo "> ⚠️ 本次退回 debug 密钥签名（仓库未配置 KEYSTORE_BASE64）。"
+              echo "> debug 密钥是构建机现场随机生成的，**这个包和任何其他版本都不能互相覆盖**，"
+              echo "> 安装前必须先卸载旧版（会清空本地数据）。"
+            fi
+            echo
+            echo "首次使用：录入页顶部填 API Key → 拍照识别 → 确认页逐题标错/蒙对 → 提交。"
+            echo "然后到原题页「分析」，再到复习页按板块「汇总小方向」、最后「生成大方向」。"
+            echo "识别、分析、汇总需要联网；原题浏览编辑、已汇总的方向、导出与备份离线可用。"
           } > RELEASE_NOTES.md
 
       - name: 发布

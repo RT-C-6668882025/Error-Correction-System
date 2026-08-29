@@ -3,6 +3,7 @@ package com.ecs.data.backup
 import android.content.Context
 import com.ecs.core.direction.Direction
 import com.ecs.core.export.Exporter
+import com.ecs.core.export.Zip
 import com.ecs.core.model.ErrorRecord
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -38,6 +39,17 @@ class BackupManager(private val context: Context) {
 
     fun listBackups(): List<File> =
         root.listFiles()?.filter { it.isDirectory }?.sortedByDescending { it.name } ?: emptyList()
+
+    /**
+     * 把一份导出打成 zip 好分享出去。
+     *
+     * 写进 cacheDir：这是给系统分享用的中转文件，发完就没用了，
+     * 让系统在空间紧张时自己回收，不占用户的存储。
+     */
+    suspend fun zipFor(dir: File): File = withContext(Dispatchers.IO) {
+        val out = File(File(context.cacheDir, "share").apply { mkdirs() }, "${dir.name}.zip")
+        Zip.zipDir(dir, out)
+    }
 
     private fun prune(keep: Int = KEEP) {
         listBackups().drop(keep).forEach { it.deleteRecursively() }
