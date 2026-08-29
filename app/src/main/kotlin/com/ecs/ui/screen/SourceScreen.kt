@@ -41,16 +41,19 @@ import com.ecs.ui.component.SectionCard
  * 复习页看到的每一条形态，最终都追溯到这里的某一道题。
  */
 @Composable
-fun SourceScreen(vm: AppViewModel) {
+fun SourceScreen(vm: AppViewModel, onEditPrompt: () -> Unit = {}) {
     val records by vm.records.collectAsState()
     val busy by vm.busy.collectAsState()
     var onlyPending by remember { mutableStateOf(false) }
+    var onlyUnclassified by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<ErrorRecord?>(null) }
 
     val pending = vm.pending()
+    val unclassified = vm.unclassified()
     val filtered = records.filter { r ->
-        (!onlyPending || !r.analyzed()) &&
+        (!onlyPending || r.formShape.isNullOrBlank()) &&
+            (!onlyUnclassified || (!r.formShape.isNullOrBlank() && !r.analyzed())) &&
             (query.isBlank() ||
                 r.stem.orEmpty().contains(query, ignoreCase = true) ||
                 r.answer.orEmpty().contains(query, ignoreCase = true) ||
@@ -71,26 +74,42 @@ fun SourceScreen(vm: AppViewModel) {
                 singleLine = true,
                 modifier = Modifier.weight(1f),
             )
-            FilterChip(
-                selected = onlyPending,
-                onClick = { onlyPending = !onlyPending },
-                label = { Text("待分析 $pending") },
-            )
         }
+        // 两个数分开摆：待分析是「还没跑」，未归类是「跑了但没落进板块」，
+        // 后者才是复习页空着的原因，混成一个数字就查不出来了
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("${filtered.size} 道", style = MaterialTheme.typography.labelMedium)
-            if (pending > 0) {
-                // 没分析就进不了复习页：板块是空的，小方向也就无从汇总
-                OutlinedButton(onClick = { vm.analyzeAll() }) {
-                    Text("全部分析 $pending 条")
-                }
+            FilterChip(
+                selected = onlyPending,
+                onClick = { onlyPending = !onlyPending; if (onlyPending) onlyUnclassified = false },
+                label = { Text("待分析 $pending") },
+            )
+            if (unclassified > 0) {
+                FilterChip(
+                    selected = onlyUnclassified,
+                    onClick = { onlyUnclassified = !onlyUnclassified; if (onlyUnclassified) onlyPending = false },
+                    label = { Text("未归类 $unclassified") },
+                )
             }
         }
-        LazyColumn(Modifier.fillMaxSize()) {
+        if (pending + unclassified > 0) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // 没归进板块就进不了复习页：那一支是空的，小方向也就无从汇总
+                OutlinedButton(onClick = { vm.analyzeAll() }) {
+                    Text("分析这 ${pending + unclassified} 条")
+                }
+                TextButton(onClick = onEditPrompt) { Text("改分析提示词") }
+            }
+        }
+        LazyColumn(Modifier.weight(1f)) {
             items(filtered, key = { it.uid }) { r ->
                 Card(
                     onClick = { editing = r },
@@ -103,8 +122,12 @@ fun SourceScreen(vm: AppViewModel) {
                         ) {
                             Text(r.src.paper, style = MaterialTheme.typography.labelSmall)
                             Badge("第${r.src.no}题", MaterialTheme.colorScheme.secondary)
-                            if (!r.analyzed()) {
-                                Badge("待分析", MaterialTheme.colorScheme.error)
+                            when {
+                                r.formShape.isNullOrBlank() ->
+                                    Badge("待分析", MaterialTheme.colorScheme.error)
+                                // 跑过了但 branch 落在十九支之外：复习页看不到它
+                                !r.analyzed() ->
+                                    Badge("未归类", MaterialTheme.colorScheme.error)
                             }
                         }
                         Text(

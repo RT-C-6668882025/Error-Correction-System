@@ -142,6 +142,26 @@ class AggregatorTest {
         assertTrue(Aggregator.blocks(bogus).none { it.path == "修辞/比喻" })
     }
 
+    @Test fun `never-run and ran-but-unclassified are counted separately`() {
+        // 混成一个数字，人会以为分析没跑；实际跑了、答案形式也有，只是没落进板块，
+        // 于是复习页一片空白而没人知道为什么
+        val mixed = corpus +
+            rec("q_020_1", no = 20, branch = null, formShape = null) +          // 没跑过
+            rec("q_021_1", no = 21, branch = "修辞/比喻", formShape = "名词") + // 跑了，板块不存在
+            rec("q_022_1", no = 22, branch = null, formShape = "名词")          // 跑了，模型没给板块
+
+        assertEquals(1, Aggregator.notAnalyzed(mixed).size)
+        assertEquals(2, Aggregator.unclassified(mixed).size)
+        assertEquals(3, Aggregator.pending(mixed).size)
+        assertEquals(4, Aggregator.analyzed(mixed).size)
+        // 三者互不重叠，加起来正好是全部
+        assertEquals(
+            mixed.size,
+            Aggregator.analyzed(mixed).size + Aggregator.notAnalyzed(mixed).size +
+                Aggregator.unclassified(mixed).size,
+        )
+    }
+
     @Test fun `blocks group by branch and keep skeleton order`() {
         val blocks = Aggregator.blocks(corpus)
         assertEquals(listOf("词法/名词", "句法/句子结构", "语法/时态"), blocks.map { it.path })

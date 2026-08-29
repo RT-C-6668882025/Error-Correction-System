@@ -6,6 +6,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,6 +67,10 @@ fun EcsNavHost(vm: AppViewModel, nav: NavHostController = rememberNavController(
             TopAppBar(
                 title = { Text(tabs.firstOrNull { it.route == current }?.label ?: title(current)) },
                 actions = {
+                    // 三级提示词是主要旋钮之一，不该埋在设置页第五张卡里
+                    IconButton(onClick = { nav.navigate(Routes.PROMPTS) }) {
+                        Icon(Icons.Outlined.Tune, contentDescription = "提示词")
+                    }
                     IconButton(onClick = { nav.navigate(Routes.SETTINGS) }) {
                         Icon(Icons.Outlined.Settings, contentDescription = "设置")
                     }
@@ -94,8 +99,12 @@ fun EcsNavHost(vm: AppViewModel, nav: NavHostController = rememberNavController(
     ) { padding ->
         NavHost(nav, startDestination = Routes.ENTRY, modifier = Modifier.padding(padding)) {
             composable(Routes.ENTRY) { EntryScreen(vm, nav) }
-            composable(Routes.SOURCE) { SourceScreen(vm) }
-            composable(Routes.REVIEW) { ReviewScreen(vm) }
+            composable(Routes.SOURCE) {
+                SourceScreen(vm, onEditPrompt = { nav.navigate(Routes.PROMPTS) })
+            }
+            composable(Routes.REVIEW) {
+                ReviewScreen(vm, onEditPrompt = { nav.navigate(Routes.PROMPTS) })
+            }
             composable(Routes.CONFIRM) { ConfirmScreen(vm, nav) }
             composable(Routes.EXPORT) { ExportScreen(vm) }
             composable(Routes.SETTINGS) { SettingsScreen(vm, nav) }

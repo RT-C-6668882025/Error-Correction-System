@@ -45,16 +45,23 @@ import com.ecs.ui.component.SectionCard
  * 不是「该填成什么形态」。
  */
 @Composable
-fun ReviewScreen(vm: AppViewModel) {
+fun ReviewScreen(vm: AppViewModel, onEditPrompt: () -> Unit = {}) {
     val records by vm.records.collectAsState()
     val directions by vm.directions.collectAsState()
     val busy by vm.busy.collectAsState()
     var rootFilter by remember { mutableStateOf<String?>(null) }
     var masked by remember { mutableStateOf(false) }
+    var showEmpty by remember { mutableStateOf(false) }
 
     val blocks = remember(records) { Aggregator.blocks(records, includeEmpty = true) }
-    val shown = blocks.filter { rootFilter == null || it.branch.root == rootFilter }
+    val analyzed = remember(records) { Aggregator.analyzed(records).size }
+    val unclassified = remember(records) { Aggregator.unclassified(records).size }
+    val notAnalyzed = remember(records) { Aggregator.notAnalyzed(records).size }
+    val shown = blocks
+        .filter { rootFilter == null || it.branch.root == rootFilter }
+        .filter { showEmpty || it.size > 0 }
     val withData = blocks.count { it.size > 0 }
+    val hidden = blocks.count { rootFilter == null || it.branch.root == rootFilter } - shown.size
     val major = directions.firstOrNull { it.scope == Direction.ALL }
 
     Column(Modifier.fillMaxSize()) {
@@ -84,7 +91,29 @@ fun ReviewScreen(vm: AppViewModel) {
             )
         }
 
-        LazyColumn(Modifier.fillMaxSize()) {
+        // 复习页空着的时候，人第一个要知道的是「题去哪了」
+        Text(
+            "已分析 $analyzed 条进了板块" +
+                (if (unclassified > 0) "　未归类 $unclassified 条" else "") +
+                (if (notAnalyzed > 0) "　待分析 $notAnalyzed 条" else ""),
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
+        if (analyzed == 0) {
+            Text(
+                if (unclassified > 0) {
+                    "这 $unclassified 条跑过分析、也有答案形式，但模型给的板块不在十九支里，" +
+                        "所以一支都没进。去原题页按「未归类」筛出来重跑一次。"
+                } else {
+                    "还没有分析好的题。先到原题页点「分析」。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+
+        LazyColumn(Modifier.weight(1f)) {
             item {
                 MajorCard(
                     major = major,
@@ -93,6 +122,7 @@ fun ReviewScreen(vm: AppViewModel) {
                     masked = masked,
                     onBuild = { vm.buildMajor() },
                     onBuildAll = { vm.buildAllMinors() },
+                    onEditPrompt = onEditPrompt,
                 )
             }
             items(shown, key = { it.path }) { block ->
@@ -102,6 +132,15 @@ fun ReviewScreen(vm: AppViewModel) {
                     masked = masked,
                     onBuild = { vm.buildMinor(block.branch) },
                 )
+            }
+            // 十九张「0 道」的卡片摊开来，本身就像坏了
+            if (hidden > 0) {
+                item {
+                    TextButton(
+                        onClick = { showEmpty = true },
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                    ) { Text("另有 $hidden 支还没有题，展开") }
+                }
             }
         }
         MessageBar(vm)
@@ -116,6 +155,7 @@ private fun MajorCard(
     masked: Boolean,
     onBuild: () -> Unit,
     onBuildAll: () -> Unit,
+    onEditPrompt: () -> Unit,
 ) {
     SectionCard("大方向") {
         Text(
@@ -139,6 +179,9 @@ private fun MajorCard(
             OutlinedButton(onClick = onBuild, enabled = minorCount > 0) {
                 Text(if (major == null) "生成大方向" else "重新生成")
             }
+        }
+        TextButton(onClick = onEditPrompt, modifier = Modifier.padding(top = 4.dp)) {
+            Text("改汇总提示词")
         }
     }
 }
