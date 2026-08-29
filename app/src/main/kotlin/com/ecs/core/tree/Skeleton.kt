@@ -1,17 +1,23 @@
 package com.ecs.core.tree
 
+/** 顶层三分，不可增删。 */
+object TopLevel {
+    const val LEXICAL = "词法"
+    const val SYNTAX = "句法"
+    const val GRAMMAR = "语法"
+    val all = listOf(LEXICAL, SYNTAX, GRAMMAR)
+}
+
 /**
- * 考点树的前两层骨架：三个大类、十九个中类，写死在代码里。
+ * 板块骨架：三个大类、十九个中类，写死在代码里。
  *
- * 为什么不让模型生成整棵树：
+ * 板块是「小方向」的作用域——一个板块下所有题的分析汇总成一棵考点树，
+ * 十九棵树再汇总成大方向。写死而不是让模型每次自己分组，是因为：
  *
- * 1. 稳定。中类是固定词表，重新生成一次也不会换名字。复习页自下而上合并同类项
- *    靠的是 [truncate] 按层截断，模型每次自由发挥的中层名会让上层分组直接裂开。
- * 2. 可靠。一个分支一次调用，输出小、快、失败只损失这一个分支；
- *    原来一次要 16000 token 生成整棵树，中途截断等于全部白跑。
- * 3. 可筛。[Branch.scope] 是给模型的范围约束，也是给人看的「这个分支管什么」。
- *
- * 模型只负责第三、四层——把中类细分到一个可执行动作。
+ * 1. 名字固定。汇总跑两次不会一次叫「名词」一次叫「名词用法」，历史能对比。
+ * 2. 范围清楚。[Branch.scope] 进提示词限定模型别跑题，也告诉你这一支管什么。
+ * 3. 归属可校验。分析输出的 branch 必须命中这十九支之一，对不上就是未归类，
+ *    留在原题页等你处理，而不是硬塞进一个看起来最像的。
  */
 object Skeleton {
 
@@ -46,25 +52,19 @@ object Skeleton {
         Branch(TopLevel.GRAMMAR, "非谓语动词", "不定式、动名词、现在分词、过去分词各自的触发条件与形式"),
     )
 
-    /** 大类 → 该类下的中类。设置页按这个分组展示。 */
+    /** 大类 → 该类下的中类。 */
     fun branchesOf(root: String): List<Branch> = BRANCHES.filter { it.root == root }
 
-    /** 按前两层匹配所属分支；对不上返回 null。 */
-    fun branchOf(path: String): Branch? {
-        val parts = path.split("/")
+    /** 精确匹配 `大类/中类`；对不上返回 null。 */
+    fun branchOf(path: String?): Branch? {
+        if (path.isNullOrBlank()) return null
+        val parts = path.trim().trim('/').split("/")
         if (parts.size < 2) return null
         return BRANCHES.firstOrNull { it.root == parts[0] && it.mid == parts[1] }
     }
 
-    /**
-     * 合格的末端路径：前两层命中骨架，总深度 3–4 层，每一层都不为空。
-     *
-     * 深度 2 不算合格——那是中类本身，范围太大，对应不到一个可执行动作。
-     */
-    fun isValidPath(path: String): Boolean {
-        val parts = path.split("/")
-        if (parts.size !in 3..4) return false
-        if (parts.any { it.isBlank() }) return false
-        return branchOf(path) != null
-    }
+    fun isBranch(path: String?): Boolean = branchOf(path) != null
+
+    /** 给模型看的清单：它只能从这里面选一个。 */
+    fun listing(): String = BRANCHES.joinToString("\n") { "- ${it.path}｜${it.scope}" }
 }

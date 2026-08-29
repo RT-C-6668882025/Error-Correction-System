@@ -3,7 +3,6 @@ package com.ecs.data.repo
 import android.content.Context
 import com.ecs.core.model.ErrorRecord
 import com.ecs.core.model.RecordStatus
-import com.ecs.core.model.Section
 import com.ecs.core.model.Src
 import com.ecs.core.parse.SlotSpec
 import com.ecs.core.rules.Validation
@@ -18,7 +17,7 @@ import java.io.File
 
 class RecordRepository(
     private val dao: RecordDao,
-    private val treeStore: TreeStore,
+    private val directionStore: DirectionStore,
     private val settings: Settings,
     private val backup: BackupManager,
 ) {
@@ -28,76 +27,64 @@ class RecordRepository(
     suspend fun snapshot(): List<ErrorRecord> = dao.all().map { it.toModel() }
 
     /**
-     * F1.2 极简录入：卷名 + 错题号，其余留空，status = 不完整。
-     * 先保证记录不丢，再保证记录完整——这里不做任何会阻断的校验。
+     * 入库。收的是确认页上标过的那些题——不标的既不入库也不分析。
+     * 先保证记录不丢，再保证记录完整：这里不做任何会阻断的校验。
      */
-    suspend fun quickAdd(
+    suspend fun add(
         paper: String,
-        section: Section,
-        spec: String,
-        totalInSection: Int? = null,
+        marks: List<SlotSpec.Mark>,
         srcRef: String? = null,
         now: Long = System.currentTimeMillis(),
         /** 识别流程带来的题干 / 提示词 / 答案，键是 (题号, 空序)。 */
         details: Map<Pair<Int, Int>, Detail> = emptyMap(),
-    ): QuickAddResult {
-        val parsed = SlotSpec.parse(spec, section)
+    ): AddResult {
         val batch = SlotSpec.batchLabel(settings.currentBatch())
         val existing = dao.allUids().toSet()
 
-        val records = parsed.entries.map { e ->
+        val records = marks.map { m ->
             ErrorRecord(
-                id = e.id(section),
-                src = Src(paper, section, e.no, e.slot, batch, totalInSection),
+                id = m.id,
+                src = Src(paper, m.no, m.slot, batch),
                 srcRef = srcRef,
-                stem = details[e.no to e.slot]?.stem,
-                given = details[e.no to e.slot]?.given,
-                answer = details[e.no to e.slot]?.answer,
-                confidence = e.confidence,
+                stem = details[m.no to m.slot]?.stem,
+                given = details[m.no to m.slot]?.given,
+                answer = details[m.no to m.slot]?.answer,
+                confidence = m.confidence,
                 createdAt = now,
-                status = RecordStatus.INCOMPLETE,
+                status = RecordStatus.PENDING,
             )
         }
         val fresh = records.filter { it.uid !in existing }
         dao.insertAll(fresh.map { it.toEntity() })
         maybeBackup()
-        return QuickAddResult(
+        return AddResult(
             records = fresh,
             inserted = fresh.size,
             skippedDuplicates = records.size - fresh.size,
-            unparsed = parsed.errors,
         )
     }
 
     data class Detail(val stem: String?, val given: String?, val answer: String?)
 
-    data class QuickAddResult(
+    data class AddResult(
         val records: List<ErrorRecord>,
         val inserted: Int,
         val skippedDuplicates: Int,
-        val unparsed: List<String>,
     )
 
-    /** 批量导入（F1.5）走同一条校验路径。 */
+    /** 批量导入走同一条状态推导路径。 */
     suspend fun importAll(records: List<ErrorRecord>): Int {
-        val tree = treeStore.tree.value ?: treeStore.load()
         val existing = dao.allUids().toSet()
         val fresh = records.filter { it.uid !in existing }
-            .map { it.copy(status = Validation.deriveStatus(it, tree)) }
+            .map { it.copy(status = Validation.deriveStatus(it)) }
         dao.insertAll(fresh.map { it.toEntity() })
         maybeBackup()
         return fresh.size
     }
 
-    /**
-     * 保存派生字段。form_rule 永远由考点树带出，调用方给的值被忽略——
-     * 一致性靠结构保证，不靠事后校验。
-     */
-    suspend fun saveAnnotation(record: ErrorRecord): ErrorRecord {
-        val tree = treeStore.tree.value ?: treeStore.load()
-        val rule = record.kaodian?.let { tree?.formRuleOf(it) }
-        val withRule = record.copy(formRule = rule, treeVersion = tree?.version ?: record.treeVersion)
-        val settled = withRule.copy(status = Validation.deriveStatus(withRule, tree))
+    /** 保存分析产出。状态由字段现状推导，不由调用方指定。 */
+    suspend fun saveAnalysis(record: ErrorRecord): ErrorRecord {
+        val settled = record.copy(status = Validation.deriveStatus(record))
         dao.update(settled.toEntity())
         return settled
     }
@@ -106,10 +93,7 @@ class RecordRepository(
 
     // ---------- 导出与备份 ----------
 
-    suspend fun exportNow(): File {
-        val tree = treeStore.tree.value ?: treeStore.load()
-        return backup.export(snapshot(), tree, prune = false)
-    }
+    suspend fun exportNow(): File = backup.export(snapshot(), directionStore.all(), prune = false)
 
     fun backups(): List<File> = backup.listBackups()
 
@@ -117,8 +101,7 @@ class RecordRepository(
         val count = dao.count()
         val last = settings.lastBackupCount()
         if (BackupManager.shouldBackup(last, count)) {
-            val tree = treeStore.tree.value ?: treeStore.load()
-            backup.export(snapshot(), tree, prune = true)
+            backup.export(snapshot(), directionStore.all(), prune = true)
             settings.setLastBackupCount(count)
         }
     }
@@ -128,7 +111,7 @@ class RecordRepository(
             val db = AppDatabase.get(context)
             return RecordRepository(
                 dao = db.records(),
-                treeStore = TreeStore(context),
+                directionStore = DirectionStore(context),
                 settings = Settings(context),
                 backup = BackupManager(context),
             )

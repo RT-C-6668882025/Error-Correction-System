@@ -1,16 +1,17 @@
 package com.ecs.agent
 
-import com.ecs.core.model.Section
 import com.ecs.core.parse.ChoiceStripper
 import com.ecs.core.prompt.PromptSlot
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 
 /**
- * F1.1 识别：题号 + 题干 + 括号提示词 + 空位，并识别选择题版式。
+ * 识别：题号 + 题干 + 括号提示词 + 空位，并识别选择题版式。
  *
- * 明确不识别手写作答（附录 B）：识别错 user 会连带污染 eye 和后续全部分析，
- * 而这种噪声在聚合后看不出来。作答由用户直接输入错题号。
+ * 判据只有一条：句子 ≥1、句中空 ≥1。不区分题型——识别出来的就是原始数据，
+ * 哪些是错题、哪些是蒙对的，由你在确认页逐条标。
+ *
+ * 明确不识别手写作答：识别错会连带污染后续全部分析，而这种噪声在汇总后看不出来。
  *
  * 选择题的选项只走到这一层：剥离后把正确选项内容写进 answer，选项本身即丢弃。
  */
@@ -45,9 +46,8 @@ class PaperScanner(
         val options: List<ChoiceStripper.Option> = emptyList(),
     )
 
-    suspend fun scan(images: List<AgentClient.Image>, section: Section): List<Question> {
+    suspend fun scan(images: List<AgentClient.Image>): List<Question> {
         val user = """
-            题型：${section.label}
             输出 JSON 数组，不要有其他文字：
             [{"no":3,"slot":1,"stem":"The ___ (develop) of AI has changed everything.","given":"develop","answer":null,"correct_letter":null,"confidence":0.97}]
         """.trimIndent()

@@ -1,14 +1,12 @@
 package com.ecs.core.export
 
 import com.ecs.core.model.Confidence
-import com.ecs.core.model.Difficulty
 import com.ecs.core.model.ErrorRecord
 import com.ecs.core.model.RecordStatus
-import com.ecs.core.model.Section
 import com.ecs.core.model.Src
-import com.ecs.core.model.Verified
+import com.ecs.core.tree.Skeleton
 
-/** F1.5 批量导入：读回 [Exporter.csv] 的格式。列缺失即视为空，不阻断。 */
+/** 批量导入：读回 [Exporter.csv] 的格式。列缺失即视为空，不阻断。 */
 object CsvImporter {
 
     fun parse(text: String, now: Long = System.currentTimeMillis()): List<ErrorRecord> {
@@ -22,32 +20,27 @@ object CsvImporter {
             }
             val id = col("id") ?: return@mapNotNull null
             val paper = col("paper") ?: return@mapNotNull null
-            val section = col("section")?.let { Section.fromLabel(it) } ?: return@mapNotNull null
             ErrorRecord(
                 id = id,
                 src = Src(
                     paper = paper,
-                    section = section,
                     no = col("no")?.toIntOrNull() ?: return@mapNotNull null,
                     slot = col("slot")?.toIntOrNull() ?: 1,
                     batch = col("batch") ?: "b01",
-                    totalInSection = col("total_in_section")?.toIntOrNull(),
                 ),
+                stem = col("stem"),
                 given = col("given"),
                 answer = col("answer"),
                 confidence = col("confidence")?.let { Confidence.fromLabel(it) } ?: Confidence.WRONG,
                 createdAt = col("created_at")?.toLongOrNull() ?: now,
-                eye = col("eye"),
-                kaodian = col("kaodian"),
-                formRule = col("form_rule"),
+                // 老导出包用的是 kaodian / form_rule / eye，读得回来才叫兼容。
+                // 老的 kaodian 是四层路径，截到板块那一层才对得上骨架
+                branch = col("branch") ?: col("kaodian")?.let { Skeleton.branchOf(it)?.path },
+                formShape = col("form_shape") ?: col("form_rule"),
+                basis = col("basis") ?: col("eye"),
                 formContext = col("form_context"),
-                secondary = col("secondary")?.split("|")?.filter { it.isNotBlank() }.orEmpty(),
-                difficulty = col("difficulty")?.let { Difficulty.fromLabel(it) },
-                coError = col("co_error")?.split("|")?.filter { it.isNotBlank() }.orEmpty(),
-                treeVersion = col("tree_version"),
-                verified = col("verified")?.let { Verified.fromLabel(it) } ?: Verified.UNCHECKED,
                 note = col("note"),
-                status = col("status")?.let { RecordStatus.fromLabel(it) } ?: RecordStatus.INCOMPLETE,
+                status = col("status")?.let { RecordStatus.fromLabel(it) } ?: RecordStatus.PENDING,
             )
         }
     }

@@ -7,6 +7,7 @@ import com.ecs.core.model.ROLE_TEXT
 import com.ecs.core.model.ROLE_VISION
 import com.ecs.core.model.activeEndpoints
 import com.ecs.core.model.normalizeUrl
+import com.ecs.core.direction.Direction
 import com.ecs.core.prompt.PromptSlot
 import com.ecs.core.rules.Validation
 import com.ecs.core.update.UpdateCheck
@@ -298,16 +299,16 @@ class PromptCatalogTest {
     }
 
     @Test fun `render appends the contract to the body`() {
-        val out = PromptSlot.REVIEW.render(null)
-        assertTrue(out.startsWith(PromptSlot.REVIEW.body.trim()))
-        assertTrue(out.endsWith(PromptSlot.REVIEW.contract.trim()))
+        val out = PromptSlot.ANALYZE.render(null)
+        assertTrue(out.startsWith(PromptSlot.ANALYZE.body.trim()))
+        assertTrue(out.endsWith(PromptSlot.ANALYZE.contract.trim()))
     }
 
     @Test fun `an override replaces only the body`() {
-        val out = PromptSlot.ANNOTATE.render("只写一句话。")
+        val out = PromptSlot.ANALYZE.render("只写一句话。")
         assertTrue(out.startsWith("只写一句话。"))
-        assertFalse(out.contains(PromptSlot.ANNOTATE.body.trim()))
-        assertTrue(out.endsWith(PromptSlot.ANNOTATE.contract.trim()))
+        assertFalse(out.contains(PromptSlot.ANALYZE.body.trim()))
+        assertTrue(out.endsWith(PromptSlot.ANALYZE.contract.trim()))
     }
 
     @Test fun `clearing the body still leaves the contract intact`() {
@@ -318,31 +319,46 @@ class PromptCatalogTest {
     }
 
     @Test fun `the output shape survives any override`() {
-        // 用户把正文清空也毁不掉解析：约束都在契约里
-        assertTrue(PromptSlot.ANNOTATE.render("").contains("\"choice\""))
-        assertTrue(PromptSlot.ANNOTATE.render("随便写").contains("form_context"))
+        // 把正文清空也毁不掉解析：约束都在契约里
+        assertTrue(PromptSlot.ANALYZE.render("").contains("\"branch\""))
+        assertTrue(PromptSlot.ANALYZE.render("随便写").contains("\"form\""))
         assertTrue(PromptSlot.SCAN.render("").contains("correct_letter"))
+        assertTrue(PromptSlot.DIRECTION_MINOR.render("").contains("\"name\""))
+        assertTrue(PromptSlot.DIRECTION_MAJOR.render("").contains("嵌套"))
     }
 
-    @Test fun `the eye banned list is carried into the annotate contract`() {
-        val contract = PromptSlot.ANNOTATE.contract
-        Validation.EYE_BANNED.forEach { assertTrue(contract.contains(it), "missing $it") }
+    @Test fun `the basis banned list is carried into the analyze contract`() {
+        val contract = PromptSlot.ANALYZE.contract
+        Validation.BASIS_BANNED.forEach { assertTrue(contract.contains(it), "missing $it") }
     }
 
     @Test fun `the choice slot locks the option rules`() {
-        val contract = PromptSlot.ANNOTATE_CHOICE.contract
-        assertTrue(contract.contains("not_form"))
+        val contract = PromptSlot.ANALYZE_CHOICE.contract
+        assertTrue(contract.contains("unmatched"))
         assertTrue(contract.contains("选项"))
     }
 
-    @Test fun `the review slot carries the style ban list`() {
-        assertTrue(PromptSlot.REVIEW.contract.contains("综上所述"))
-        assertTrue(PromptSlot.REVIEW.contract.contains("题号"))
+    @Test fun `the major direction slot carries the style ban list`() {
+        assertTrue(PromptSlot.DIRECTION_MAJOR.contract.contains("综上所述"))
+        assertTrue(PromptSlot.DIRECTION_MAJOR.contract.contains("题号"))
+    }
+
+    @Test fun `both direction slots cap the nesting depth`() {
+        listOf(PromptSlot.DIRECTION_MINOR, PromptSlot.DIRECTION_MAJOR).forEach {
+            assertTrue(it.contract.contains(Direction.MAX_DEPTH.toString()), "${it.name} 没写深度上限")
+        }
     }
 
     @Test fun `slots for deleted tasks are gone`() {
-        listOf("VERIFY", "TREE_MAINTAIN", "REPORT_MICRO", "REPORT_MACRO").forEach {
-            assertNull(PromptSlot.fromName(it), "$it 还在")
+        listOf(
+            "VERIFY", "TREE_MAINTAIN", "REPORT_MICRO", "REPORT_MACRO",
+            "TREE_GENERATE", "ANNOTATE", "ANNOTATE_CHOICE", "REVIEW",
+        ).forEach { assertNull(PromptSlot.fromName(it), "$it 还在") }
+    }
+
+    @Test fun `the three stages each have their own slot`() {
+        listOf("ANALYZE", "DIRECTION_MINOR", "DIRECTION_MAJOR").forEach {
+            assertNotNull(PromptSlot.fromName(it), "$it 缺了")
         }
     }
 
@@ -354,10 +370,10 @@ class PromptCatalogTest {
     }
 
     @Test fun `modified only counts a real difference`() {
-        assertFalse(PromptSlot.REVIEW.modified(null))
-        assertFalse(PromptSlot.REVIEW.modified(PromptSlot.REVIEW.body))
-        assertFalse(PromptSlot.REVIEW.modified("  ${PromptSlot.REVIEW.body}  "))
-        assertTrue(PromptSlot.REVIEW.modified("别的写法"))
+        assertFalse(PromptSlot.ANALYZE.modified(null))
+        assertFalse(PromptSlot.ANALYZE.modified(PromptSlot.ANALYZE.body))
+        assertFalse(PromptSlot.ANALYZE.modified("  ${PromptSlot.ANALYZE.body}  "))
+        assertTrue(PromptSlot.ANALYZE.modified("别的写法"))
     }
 
     @Test fun `slot names round trip`() {

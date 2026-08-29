@@ -1,9 +1,9 @@
 package com.ecs.data.backup
 
 import android.content.Context
+import com.ecs.core.direction.Direction
 import com.ecs.core.export.Exporter
 import com.ecs.core.model.ErrorRecord
-import com.ecs.core.tree.KaodianTree
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -21,16 +21,20 @@ class BackupManager(private val context: Context) {
 
     fun stamp(): String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
 
-    suspend fun export(records: List<ErrorRecord>, tree: KaodianTree?, prune: Boolean): File =
-        withContext(Dispatchers.IO) {
-            val pkg = Exporter.build(records, tree, stamp())
-            val dir = File(root, pkg.dirName).apply { mkdirs() }
-            File(dir, "README.md").writeText(pkg.readme)
-            File(dir, "data.json").writeText(pkg.dataJson)
-            File(dir, "data.csv").writeText(pkg.dataCsv)
-            if (prune) prune()
-            dir
-        }
+    suspend fun export(
+        records: List<ErrorRecord>,
+        directions: List<Direction>,
+        prune: Boolean,
+    ): File = withContext(Dispatchers.IO) {
+        val pkg = Exporter.build(records, directions, stamp())
+        val dir = File(root, pkg.dirName).apply { mkdirs() }
+        File(dir, "README.md").writeText(pkg.readme)
+        File(dir, "data.json").writeText(pkg.dataJson)
+        File(dir, "data.csv").writeText(pkg.dataCsv)
+        File(dir, "directions.json").writeText(pkg.directionsJson)
+        if (prune) prune()
+        dir
+    }
 
     fun listBackups(): List<File> =
         root.listFiles()?.filter { it.isDirectory }?.sortedByDescending { it.name } ?: emptyList()

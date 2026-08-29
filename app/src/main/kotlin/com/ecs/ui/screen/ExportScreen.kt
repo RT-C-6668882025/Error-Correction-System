@@ -32,8 +32,8 @@ fun ExportScreen(vm: AppViewModel) {
         BusyBar(busy)
         SectionCard("导出包") {
             Text(
-                "README.md（≤120 行）+ data.json + data.csv + 倒推表.md。" +
-                    "交给一个全新模型会话，不加任何提示词，应当能产出同质量的报告。",
+                "README.md（≤120 行）+ data.json + data.csv + directions.json。" +
+                    "交给一个全新模型会话，不加任何提示词，它应当能读懂三级结构并接着往下汇总。",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),
             )

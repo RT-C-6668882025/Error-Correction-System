@@ -23,9 +23,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.ecs.core.agg.Aggregator
+import com.ecs.core.direction.Direction
+import com.ecs.core.tree.TopLevel
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.Badge
 import com.ecs.ui.component.BusyBar
@@ -33,22 +37,25 @@ import com.ecs.ui.component.MessageBar
 import com.ecs.ui.component.SectionCard
 
 /**
- * 复习：自下而上的递归。
+ * 递归式复习。两级，每一级读的都是上一级的输出：
  *
- * 末端层一个考点一张卡，交出这一类空的答案形式；往上一层，下层的形态成为上层的输入。
- * 页面上只有形态与题眼，没有错误率、次数、难度分布——那些答的是「错得怎么样」，
+ *   一道题的分析 → 小方向（一个板块一棵树）→ 大方向
+ *
+ * 页面上只有形态与依据，没有错误率、次数、难度分布——那些答的是「错得怎么样」，
  * 不是「该填成什么形态」。
  */
 @Composable
 fun ReviewScreen(vm: AppViewModel) {
     val records by vm.records.collectAsState()
-    val tree by vm.tree.collectAsState()
+    val directions by vm.directions.collectAsState()
     val busy by vm.busy.collectAsState()
-    val level by vm.level.collectAsState()
-    val narratives by vm.narratives.collectAsState()
+    var rootFilter by remember { mutableStateOf<String?>(null) }
     var masked by remember { mutableStateOf(false) }
 
-    val groups = remember(records, tree, level) { Aggregator.groups(records, tree, level) }
+    val blocks = remember(records) { Aggregator.blocks(records, includeEmpty = true) }
+    val shown = blocks.filter { rootFilter == null || it.branch.root == rootFilter }
+    val withData = blocks.count { it.size > 0 }
+    val major = directions.firstOrNull { it.scope == Direction.ALL }
 
     Column(Modifier.fillMaxSize()) {
         BusyBar(busy)
@@ -58,43 +65,42 @@ fun ReviewScreen(vm: AppViewModel) {
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Aggregator.Level.entries.forEach { l ->
+            FilterChip(
+                selected = rootFilter == null,
+                onClick = { rootFilter = null },
+                label = { Text("全部") },
+            )
+            TopLevel.all.forEach { root ->
                 FilterChip(
-                    selected = level == l,
-                    onClick = { vm.setLevel(l) },
-                    label = { Text(l.label) },
+                    selected = rootFilter == root,
+                    onClick = { rootFilter = root },
+                    label = { Text(root) },
                 )
             }
             FilterChip(
                 selected = masked,
                 onClick = { masked = !masked },
-                label = { Text("遮住答案") },
+                label = { Text("遮住形态") },
             )
-        }
-        Text(
-            "${level.hint}　${groups.size} 组",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.secondary,
-            modifier = Modifier.padding(horizontal = 12.dp),
-        )
-
-        if (groups.isEmpty()) {
-            SectionCard("还没有可复习的") {
-                Text(
-                    "先到录入页拍一张卷子，标注完成后这里就会按考点层级汇总出答案形式。",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
         }
 
         LazyColumn(Modifier.fillMaxSize()) {
-            items(groups, key = { it.kaodian }) { group ->
-                GroupCard(
-                    group = group,
+            item {
+                MajorCard(
+                    major = major,
+                    minorCount = directions.count { it.scope != Direction.ALL },
+                    blocksWithData = withData,
                     masked = masked,
-                    narrative = narratives[group.kaodian],
-                    onNarrate = { vm.narrate(group) },
+                    onBuild = { vm.buildMajor() },
+                    onBuildAll = { vm.buildAllMinors() },
+                )
+            }
+            items(shown, key = { it.path }) { block ->
+                BlockCard(
+                    block = block,
+                    direction = directions.firstOrNull { it.scope == block.path },
+                    masked = masked,
+                    onBuild = { vm.buildMinor(block.branch) },
                 )
             }
         }
@@ -103,83 +109,131 @@ fun ReviewScreen(vm: AppViewModel) {
 }
 
 @Composable
-private fun GroupCard(
-    group: Aggregator.Group,
+private fun MajorCard(
+    major: Direction?,
+    minorCount: Int,
+    blocksWithData: Int,
     masked: Boolean,
-    narrative: com.ecs.core.report.ReportBuilder.Narrative?,
-    onNarrate: () -> Unit,
+    onBuild: () -> Unit,
+    onBuildAll: () -> Unit,
 ) {
-    var expanded by remember(group.kaodian) { mutableStateOf(false) }
-
-    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
-        Column(Modifier.padding(12.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(group.leafName, style = MaterialTheme.typography.titleSmall)
-                Badge(group.root, MaterialTheme.colorScheme.secondary)
+    SectionCard("大方向") {
+        Text(
+            major?.let { "${it.size()} 个节点，读的是 ${it.fromCount} 个板块的输出" }
+                ?: "还没生成。它的输入只有各板块的小方向，不回头读原题。",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        Text(
+            "$blocksWithData 个板块有题　$minorCount 个已汇总",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.secondary,
+        )
+        if (major != null && !masked) {
+            TreeText(major)
+        }
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onBuildAll, enabled = blocksWithData > 0) {
+                Text("汇总全部板块")
             }
-            Text(
-                group.kaodian,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.secondary,
-            )
-
-            // 这一组的输出：往上一层时，它就是上层的输入
-            group.formRules.forEach {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
-
-            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.padding(top = 4.dp)) {
-                Text(if (expanded) "收起 ${group.size} 道" else "展开 ${group.size} 道")
-            }
-
-            if (expanded) {
-                HorizontalDivider(Modifier.padding(bottom = 6.dp))
-                group.rows.forEach { row ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-                        Text(row.eye, Modifier.weight(2f), style = MaterialTheme.typography.bodySmall)
-                        Text(
-                            row.formContext ?: "—",
-                            Modifier.weight(1f),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.secondary,
-                        )
-                        Text(
-                            if (masked) "＿＿" else (row.answer ?: "—"),
-                            Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-                if (group.children.size > 1) {
-                    Text(
-                        "由这些考点汇总：${group.children.joinToString("、") { it.substringAfterLast('/') }}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                }
-                narrative?.let {
-                    HorizontalDivider(Modifier.padding(vertical = 6.dp))
-                    Labeled("决定性判断点", it.decisivePoint)
-                    Labeled("最易混淆", it.confusable)
-                    Labeled("怎么练", it.fixPath)
-                }
-                OutlinedButton(onClick = onNarrate, modifier = Modifier.padding(top = 6.dp)) {
-                    Text(if (narrative == null) "让模型补判断" else "重新生成")
-                }
+            OutlinedButton(onClick = onBuild, enabled = minorCount > 0) {
+                Text(if (major == null) "生成大方向" else "重新生成")
             }
         }
     }
 }
 
 @Composable
-private fun Labeled(label: String, value: String) {
-    if (value.isBlank()) return
-    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
-    Text(value, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 4.dp))
+private fun BlockCard(
+    block: Aggregator.Block,
+    direction: Direction?,
+    masked: Boolean,
+    onBuild: () -> Unit,
+) {
+    var expanded by remember(block.path) { mutableStateOf(false) }
+    // 汇总之后又分析了新题：这棵树该重跑了
+    val stale = direction != null && direction.fromCount != block.size
+
+    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(block.branch.mid, style = MaterialTheme.typography.titleSmall)
+                Badge(block.branch.root, MaterialTheme.colorScheme.secondary)
+                Text("${block.size} 道", style = MaterialTheme.typography.labelSmall)
+                if (stale) Badge("有新题", MaterialTheme.colorScheme.error)
+            }
+            Text(
+                block.branch.scope,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.secondary,
+            )
+
+            if (direction != null && !direction.empty) {
+                if (masked) {
+                    Text(
+                        "${direction.size()} 个节点（已遮住）",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                } else {
+                    TreeText(direction)
+                }
+            } else if (block.size > 0) {
+                Text(
+                    "还没汇总。这一支下 ${block.size} 道题的分析就是它的输入。",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+
+            Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onBuild, enabled = block.size > 0) {
+                    Text(if (direction == null) "汇总小方向" else "重新汇总")
+                }
+                if (block.size > 0) {
+                    TextButton(onClick = { expanded = !expanded }) {
+                        Text(if (expanded) "收起原始分析" else "看这 ${block.size} 条分析")
+                    }
+                }
+            }
+
+            if (expanded) {
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                block.analyses.forEach { a ->
+                    Column(Modifier.padding(vertical = 3.dp)) {
+                        Text(
+                            if (masked) "＿＿" else a.formShape,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            "依据　${a.basis ?: "—"}" + (a.formContext?.let { "　语境　$it" } ?: ""),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary,
+                        )
+                        a.answer?.let {
+                            Text(
+                                if (masked) "答案　＿＿" else "答案　$it",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 树枝是用空格对齐的，必须等宽字体，否则层级会歪。 */
+@Composable
+private fun TreeText(direction: Direction) {
+    Text(
+        direction.render(),
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = FontFamily.Monospace,
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp),
+    )
 }

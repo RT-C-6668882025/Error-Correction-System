@@ -1,13 +1,17 @@
 import com.ecs.agent.AgentClient
+import com.ecs.agent.Analyzer
+import com.ecs.agent.DirectionBuilder
 import com.ecs.agent.PromptProvider
-import com.ecs.agent.TreeGenerator
+import com.ecs.core.direction.Direction
+import com.ecs.core.direction.DirectionNode
 import com.ecs.core.model.ApiEndpoint
 import com.ecs.core.model.Protocol
 import com.ecs.core.tree.Skeleton
 import com.ecs.core.tree.TopLevel
-import com.ecs.core.tree.truncate
-import kotlinx.coroutines.runBlocking
 import kotlin.test.*
+
+private val client =
+    AgentClient { AgentClient.Config(ApiEndpoint("x", "x", "https://x.com", Protocol.OPENAI), "m") }
 
 class SkeletonTest {
 
@@ -33,169 +37,155 @@ class SkeletonTest {
     }
 
     @Test fun `subject-verb agreement lives under grammar, not syntax`() {
-        // 用户给的分法：主谓一致属于语法，不是句法
-        assertNotNull(Skeleton.branchOf("语法/主谓一致/就近原则/either or"))
-        assertNull(Skeleton.branchOf("句法/主谓一致/就近原则"))
+        assertNotNull(Skeleton.branchOf("语法/主谓一致"))
+        assertNull(Skeleton.branchOf("句法/主谓一致"))
     }
 
-    @Test fun `valid paths are three or four deep under a real branch`() {
-        assertTrue(Skeleton.isValidPath("语法/时态/完成时/现在完成时"))
-        assertTrue(Skeleton.isValidPath("词法/名词/后缀转换/-tion"))
-        assertTrue(Skeleton.isValidPath("句法/句子成分/定语"))
-    }
-
-    @Test fun `a mid-level path alone is not a valid leaf`() {
-        // 深度 2 就是中类本身，范围太大，对应不到一个可执行动作
-        assertFalse(Skeleton.isValidPath("语法/时态"))
-        assertFalse(Skeleton.isValidPath("语法"))
+    @Test fun `branchOf matches on the first two segments`() {
+        // 老库里的四层考点路径截到板块那一层照样认得
+        assertEquals("词法/名词", Skeleton.branchOf("词法/名词/后缀转换/-tion")?.path)
+        assertEquals("语法/时态", Skeleton.branchOf("语法/时态")?.path)
     }
 
     @Test fun `invented mids and roots are rejected`() {
-        assertFalse(Skeleton.isValidPath("语法/语篇衔接/连接词"))
-        assertFalse(Skeleton.isValidPath("修辞/比喻/明喻"))
-        assertFalse(Skeleton.isValidPath("词法/名词/后缀/转换/-tion"))  // 五层，太深
-        assertFalse(Skeleton.isValidPath("词法//后缀转换"))
+        assertNull(Skeleton.branchOf("语法/语篇衔接"))
+        assertNull(Skeleton.branchOf("修辞/比喻/明喻"))
+        assertNull(Skeleton.branchOf("语法"))
+        assertNull(Skeleton.branchOf(""))
+        assertNull(Skeleton.branchOf(null))
+        assertFalse(Skeleton.isBranch("unmatched"))
     }
 
-    @Test fun `truncating a leaf lands back on the fixed skeleton`() {
-        // 自下而上合并同类项：depth 2 与 depth 1 必须是固定词表，否则上层分组会裂开
-        val leaf = "语法/非谓语动词/动名词/介词后接动名词"
-        assertEquals("语法/非谓语动词", truncate(leaf, 2))
-        assertEquals("语法", truncate(leaf, 1))
-        assertNotNull(Skeleton.BRANCHES.firstOrNull { it.path == truncate(leaf, 2) })
+    @Test fun `the listing shown to the model covers every branch with its scope`() {
+        val listing = Skeleton.listing()
+        Skeleton.BRANCHES.forEach {
+            assertTrue(listing.contains(it.path), "清单里缺 ${it.path}")
+            assertTrue(listing.contains(it.scope), "清单里缺 ${it.path} 的范围")
+        }
     }
 }
 
-class TreeGeneratorBranchTest {
+class AnalyzerParseTest {
 
-    private val generator = TreeGenerator(
-        AgentClient { AgentClient.Config(ApiEndpoint("x", "x", "https://x.com", Protocol.OPENAI), "m") },
-        PromptProvider.DEFAULT,
-    )
+    private val analyzer = Analyzer(client, PromptProvider.DEFAULT)
 
-    private val tense = Skeleton.BRANCHES.first { it.path == "语法/时态" }
-
-    @Test fun `a clean branch response becomes nodes with embeddings`() {
-        val raw = """
-            [{"path":"语法/时态/完成时/现在完成时","form_rule":"have/has + 过去分词"},
-             {"path":"语法/时态/进行时/现在进行时","form_rule":"be + 现在分词"}]
-        """.trimIndent()
-        val nodes = generator.parseBranch(raw, tense)
-        assertEquals(2, nodes.size)
-        assertEquals("have/has + 过去分词", nodes[0].formRule)
-        assertTrue(nodes.all { it.embedding.isNotEmpty() })
-        assertTrue(nodes.all { Skeleton.branchOf(it.path) == tense })
+    @Test fun `a clean response becomes an analysis`() {
+        val out = analyzer.parse(
+            """{"branch":"词法/名词","form":"名词，动词加 -tion 后缀",
+                "basis":"空前有 the，空后接 of 短语","context":"单数，谓语 has 限定"}"""
+        )
+        assertEquals("词法/名词", out.branch)
+        assertEquals("名词，动词加 -tion 后缀", out.formShape)
+        assertEquals("空前有 the，空后接 of 短语", out.basis)
+        assertEquals("单数，谓语 has 限定", out.formContext)
+        assertFalse(out.unmatched)
     }
 
-    @Test fun `nodes that wander into another branch are dropped`() {
-        // 跑题的节点若留下，会污染那一支的分组——宁可这一支少几个
-        val raw = """
-            [{"path":"语法/时态/完成时/现在完成时","form_rule":"have/has + 过去分词"},
-             {"path":"语法/语态/被动语态/一般现在时被动","form_rule":"am/is/are + 过去分词"},
-             {"path":"词法/动词/时态形式/第三人称单数","form_rule":"动词加 -s"}]
-        """.trimIndent()
-        val nodes = generator.parseBranch(raw, tense)
+    @Test fun `a branch off the skeleton is unmatched, not forced into the nearest one`() {
+        // 硬塞会把那一支的汇总带偏，宁可留着让人处理
+        val out = analyzer.parse("""{"branch":"词法/瞎编","form":"名词"}""")
+        assertNull(out.branch)
+        assertTrue(out.unmatched)
+        assertEquals("名词", out.formShape)
+    }
+
+    @Test fun `the explicit unmatched marker is honoured`() {
+        val out = analyzer.parse("""{"branch":"unmatched","form":"读懂选项才能选"}""")
+        assertNull(out.branch)
+        assertTrue(out.unmatched)
+    }
+
+    @Test fun `a deeper path is accepted and folded back to its branch`() {
+        val out = analyzer.parse("""{"branch":"词法/名词/后缀转换/-tion","form":"名词"}""")
+        assertEquals("词法/名词", out.branch)
+        assertFalse(out.unmatched)
+    }
+
+    @Test fun `a response with no answer form is refused outright`() {
+        // 没有答案形式，这条分析就没有任何用处
+        assertFailsWith<Analyzer.EmptyResult> {
+            analyzer.parse("""{"branch":"词法/名词","basis":"空前有 the"}""")
+        }
+    }
+
+    @Test fun `an empty context becomes null rather than an empty string`() {
+        val out = analyzer.parse("""{"branch":"词法/名词","form":"名词","context":"  "}""")
+        assertNull(out.formContext)
+    }
+
+    @Test fun `apply touches the analysis half only`() {
+        val before = rec("q_001_1", branch = null, formShape = null, basis = null)
+        val after = analyzer.apply(
+            before,
+            Analyzer.Output("语法/时态", "一般过去时", "句末有 last year", null, unmatched = false),
+        )
+        assertEquals("语法/时态", after.branch)
+        assertEquals("一般过去时", after.formShape)
+        // 原始数据一个字都没动
+        assertEquals(before.stem, after.stem)
+        assertEquals(before.answer, after.answer)
+        assertEquals(before.src, after.src)
+        assertEquals(before.confidence, after.confidence)
+        assertEquals(before.createdAt, after.createdAt)
+    }
+}
+
+class DirectionBuilderTest {
+
+    private val builder = DirectionBuilder(client, PromptProvider.DEFAULT)
+
+    @Test fun `nested nodes parse into a tree`() {
+        val nodes = builder.parseNodes(
+            """[{"name":"普通n","children":[
+                 {"name":"可数n","children":[{"name":"规则复数","rule":"词尾加 -s"}]}]}]"""
+        )
         assertEquals(1, nodes.size)
-        assertEquals("语法/时态/完成时/现在完成时", nodes[0].path)
+        assertEquals("普通n", nodes.single().name)
+        assertEquals("规则复数", nodes.single().children.single().children.single().name)
     }
 
-    @Test fun `nodes missing a form rule or too shallow are dropped`() {
-        val raw = """
-            [{"path":"语法/时态/完成时/现在完成时","form_rule":""},
-             {"path":"语法/时态","form_rule":"看时间状语"},
-             {"path":"语法/时态/将来时/一般将来时","form_rule":"will + 动词原形"}]
-        """.trimIndent()
-        val nodes = generator.parseBranch(raw, tense)
-        assertEquals(1, nodes.size)
-        assertEquals("语法/时态/将来时/一般将来时", nodes[0].path)
-    }
-
-    @Test fun `duplicate paths collapse to one`() {
-        val raw = """
-            [{"path":"语法/时态/完成时/现在完成时","form_rule":"have/has + 过去分词"},
-             {"path":"语法/时态/完成时/现在完成时","form_rule":"重复的一条"}]
-        """.trimIndent()
-        assertEquals(1, generator.parseBranch(raw, tense).size)
+    @Test fun `parsing cleans out the junk the model sometimes emits`() {
+        val nodes = builder.parseNodes(
+            """[{"name":"  "},{"name":"空壳","children":[]},{"name":"好的","rule":"词尾加 -s"}]"""
+        )
+        assertEquals(listOf("好的"), nodes.map { it.name })
     }
 
     @Test fun `a fenced response with commentary still parses`() {
-        val raw = """
-            好的，这是结果：
-            ```json
-            [{"path":"语法/时态/完成时/过去完成时","form_rule":"had + 过去分词"}]
-            ```
-        """.trimIndent()
-        assertEquals(1, generator.parseBranch(raw, tense).size)
+        val nodes = builder.parseNodes(
+            "好的：\n```json\n[{\"name\":\"可数n\",\"rule\":\"词尾加 -s\"}]\n```"
+        )
+        assertEquals(1, nodes.size)
     }
 
-    @Test fun `the created version is stamped onto every node`() {
-        val raw = """[{"path":"语法/时态/完成时/现在完成时","form_rule":"have/has + 过去分词"}]"""
-        assertEquals("v3", generator.parseBranch(raw, tense, version = "v3").single().createdIn)
-    }
-}
+    @Test fun `the major stage is fed the minor outputs and nothing else`() {
+        val minors = listOf(
+            Direction(
+                "词法/名词",
+                listOf(DirectionNode("可数n", children = listOf(DirectionNode("规则复数", rule = "词尾加 -s")))),
+                fromCount = 4, generatedAt = 0,
+            ),
+            Direction("语法/时态", listOf(DirectionNode("现在完成时", rule = "have + 过去分词")), 3, 0),
+        )
+        val payload = builder.majorInput(minors)
 
-/** 整棵树：一支失败不该拖垮其余十八支。 */
-class TreeGeneratorWholeRunTest {
-
-    private val client =
-        AgentClient { AgentClient.Config(ApiEndpoint("x", "x", "https://x.com", Protocol.OPENAI), "m") }
-
-    /** [broken] 里的分支抛错，其余各产出一个末端。 */
-    private class Fake(client: AgentClient, val broken: Set<String>) : TreeGenerator(client) {
-        override suspend fun generateBranch(branch: Skeleton.Branch, version: String) =
-            if (branch.path in broken) throw AgentClient.AgentException("${branch.path} 挂了")
-            else parseBranch(
-                """[{"path":"${branch.path}/子类/末端","form_rule":"这一支的形态"}]""",
-                branch,
-                version,
-            )
-    }
-
-    @Test fun `a partial run still produces a usable tree and names what failed`() = runBlocking {
-        val broken = setOf("语法/时态", "词法/冠词")
-        val result = Fake(client, broken).generate()
-
-        assertEquals(Skeleton.BRANCHES.size - broken.size, result.tree.nodes.size)
-        assertEquals(broken, result.failed.map { it.branch.path }.toSet())
-        assertTrue(result.failed.all { it.reason.contains("挂了") })
-        // 剩下的十七支照样能用来标注
-        assertTrue(result.tree.liveNodes.all { it.embedding.isNotEmpty() })
-    }
-
-    @Test fun `an empty branch counts as a failure even without an exception`() = runBlocking {
-        // 模型返回了东西但一条都不合格，和抛错一样要说出来
-        val silent = object : TreeGenerator(client) {
-            override suspend fun generateBranch(branch: Skeleton.Branch, version: String) =
-                if (branch.path == "句法/句子种类") emptyList()
-                else parseBranch(
-                    """[{"path":"${branch.path}/子类/末端","form_rule":"形态"}]""", branch, version,
-                )
+        // 上一阶段的输出确实在里面
+        assertTrue(payload.contains("词法/名词"))
+        assertTrue(payload.contains("规则复数"))
+        assertTrue(payload.contains("have + 过去分词"))
+        // 原题的任何东西都不该出现在这一级
+        listOf("q_001_1", "The ___ of AI", "development", "空前有 the", "2023真题卷").forEach {
+            assertFalse(payload.contains(it), "大方向的输入里混进了原题字段：$it")
         }
-        val result = silent.generate()
-        assertEquals(listOf("句法/句子种类"), result.failed.map { it.branch.path })
-        assertTrue(result.failed.single().reason.contains("没有产出"))
     }
 
-    @Test fun `when every branch fails the error names the first reason`() = runBlocking {
-        val allBroken = Fake(client, Skeleton.BRANCHES.map { it.path }.toSet())
-        val e = assertFailsWith<AgentClient.AgentException> { allBroken.generate() }
-        assertTrue(e.message!!.contains("挂了"))
-    }
-
-    @Test fun `progress is reported once per branch`() = runBlocking {
-        val seen = mutableListOf<Int>()
-        Fake(client, emptySet()).generate { done, total, _ ->
-            seen += done
-            assertEquals(Skeleton.BRANCHES.size, total)
-        }
-        assertEquals(Skeleton.BRANCHES.size, seen.size)
-        assertEquals(Skeleton.BRANCHES.size, seen.max())
-    }
-
-    @Test fun `only-mode runs just the branches asked for`() = runBlocking {
-        val two = Skeleton.BRANCHES.take(2)
-        val result = Fake(client, emptySet()).generate(only = two)
-        assertEquals(2, result.tree.nodes.size)
-        assertEquals(two.map { it.path }.toSet(), result.tree.nodes.map { truncate(it.path, 2) }.toSet())
+    @Test fun `the major payload groups the minors under their roots`() {
+        val minors = listOf(
+            Direction("词法/名词", listOf(DirectionNode("可数n", rule = "加 -s")), 1, 0),
+            Direction("语法/时态", listOf(DirectionNode("完成时", rule = "have + 过去分词")), 1, 0),
+        )
+        val payload = builder.majorInput(minors)
+        assertTrue(payload.indexOf("# 词法") < payload.indexOf("# 语法"))
+        assertFalse(payload.contains("# 句法"), "没有小方向的大类不该出现")
     }
 }

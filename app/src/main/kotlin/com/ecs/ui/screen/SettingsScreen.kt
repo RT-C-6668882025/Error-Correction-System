@@ -37,6 +37,7 @@ import com.ecs.core.model.ModelCatalog
 import com.ecs.core.model.Protocol
 import com.ecs.core.model.activeEndpoints
 import com.ecs.core.tree.Skeleton
+import com.ecs.core.tree.TopLevel
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.ApiKeyField
 import com.ecs.ui.component.Badge
@@ -49,7 +50,7 @@ import com.ecs.ui.nav.Routes
 fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
     val context = LocalContext.current
     val busy by vm.busy.collectAsState()
-    val tree by vm.tree.collectAsState()
+    val directions by vm.directions.collectAsState()
     val endpoints by vm.endpoints.collectAsState()
     val textModel by vm.textModel.collectAsState()
     val visionModel by vm.visionModel.collectAsState()
@@ -66,7 +67,7 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
         val active = activeEndpoints(endpoints, visionEndpoint, textEndpoint)
         SectionCard("API Key") {
             Text(
-                "识别、标注、复习判断都要联网。下面是当前两档在用的端点，填完就能用。",
+                "识别、分析、汇总方向都要联网。下面是当前两档在用的端点，填完就能用。",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),
             )
@@ -130,7 +131,7 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
 
         SectionCard("文本模型（判断用）") {
             Text(
-                "考点树生成、标注、复习判断走这个模型。标注质量直接决定复习页对不对，" +
+                "分析、小方向、大方向三级都走这个模型。分析质量直接决定复习页对不对，" +
                     "这一档不建议为省钱降配。",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),
@@ -210,43 +211,33 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
             ) { Text("查看与编辑提示词") }
         }
 
-        SectionCard("考点树") {
-            // 前两层是写死的骨架，模型只填末端；这里看的是哪几支已经填上了
-            val covered = tree?.liveNodes.orEmpty()
-                .mapNotNull { Skeleton.branchOf(it.path)?.path }
-                .toSet()
-            val missing = Skeleton.BRANCHES.filterNot { it.path in covered }
-
+        SectionCard("板块与方向") {
+            // 板块是写死的十九支；方向是这些板块下的分析汇总出来的
+            val minors = directions.filterNot { it.scope == com.ecs.core.direction.Direction.ALL }
+            val major = directions.firstOrNull { it.scope == com.ecs.core.direction.Direction.ALL }
             Text(
-                tree?.let {
-                    "${it.version} · ${it.liveNodes.size} 个末端节点 · " +
-                        "${covered.size}/${Skeleton.BRANCHES.size} 支已生成"
-                } ?: "尚未生成（第一次标注时会自动生成）",
+                "板块固定 ${Skeleton.BRANCHES.size} 支：词法 ${Skeleton.branchesOf(TopLevel.LEXICAL).size}、" +
+                    "句法 ${Skeleton.branchesOf(TopLevel.SYNTAX).size}、" +
+                    "语法 ${Skeleton.branchesOf(TopLevel.GRAMMAR).size}。分析时模型只能从这些里选一个。",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),
             )
             Text(
-                "大类与中类固定：词法 9 支、句法 3 支、语法 7 支。模型只往下细分到能对应一个动作的末端，" +
-                    "一支一次调用，失败只损失那一支。没有树就没有 form_rule，标注无从谈起。",
+                "已汇总小方向 ${minors.size} 个" + (major?.let { "　大方向读了 ${it.fromCount} 个板块的输出" } ?: "　大方向未生成"),
                 style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.padding(top = 4.dp),
             )
-            if (missing.isNotEmpty() && tree != null) {
-                Text(
-                    "缺：${missing.joinToString("、") { it.path }}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
-            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { vm.generateTree() }) {
-                    Text(if (tree == null) "生成考点树" else "全部重新生成")
-                }
-                if (missing.isNotEmpty() && tree != null) {
-                    OutlinedButton(onClick = { vm.regenerateBranches(missing) }) {
-                        Text("只补这 ${missing.size} 支")
-                    }
-                }
+            Text(
+                "汇总在复习页做：一个板块一次调用，输入是那一支下每道题的分析。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.secondary,
+            )
+            if (major != null) {
+                OutlinedButton(
+                    onClick = { vm.deleteDirection(com.ecs.core.direction.Direction.ALL) },
+                    modifier = Modifier.padding(top = 8.dp),
+                ) { Text("删掉大方向重来") }
             }
         }
 
@@ -304,7 +295,7 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
 
         SectionCard("联网范围") {
             Text(
-                "识别、标注、报告生成、树生成与维护需要联网。录入、列表、倒推表、聚合数字、" +
+                "识别、分析、汇总小方向与大方向需要联网。原题的浏览与编辑、已汇总的方向、" +
                     "导出与备份全部离线可用。",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),

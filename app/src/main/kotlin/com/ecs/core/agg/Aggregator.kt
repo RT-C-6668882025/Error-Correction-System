@@ -1,97 +1,71 @@
 package com.ecs.core.agg
 
 import com.ecs.core.model.ErrorRecord
-import com.ecs.core.tree.KaodianTree
-import com.ecs.core.tree.truncate
+import com.ecs.core.tree.Skeleton
 
 /**
- * 自下而上的递归聚合。
+ * 把分析好的记录按板块归堆。
  *
- * 只做一件事：把原题按考点树的某个层级归堆，交出这一堆的「答案形式」。
- * 层级从末端（depth 4）往上走到大类（depth 1），上一层的输入就是下一层的输出——
- * 末端交出一条 form_rule，三层视图收到的就是这些 form_rule 的集合。
- *
- * 统计口径不再存在：错误率、加权失分、跨卷次数、成熟度门槛这些都答的是
- * 「你错得怎么样」，而这个应用要答的是「这一类空该填成什么形态」。
+ * 只做分组和取字段，不做任何判断——判断在「小方向」那一步交给模型，
+ * 而它读到的输入就是这里交出来的 [Block.analyses]。
  */
 object Aggregator {
 
-    /** 复习层级。数字对应 [truncate] 的 depth。 */
-    enum class Level(val depth: Int, val label: String, val hint: String) {
-        LEAF(4, "末端", "一个考点对应一个可执行动作"),
-        THIRD(3, "三层", "把相邻末端并成一组"),
-        SECOND(2, "两层", "看词类/结构层面的共性"),
-        ROOT(1, "大类", "词法 / 句法 / 语法");
-
-        companion object {
-            val DEFAULT = LEAF
-            fun ofDepth(depth: Int): Level = entries.firstOrNull { it.depth == depth } ?: DEFAULT
-        }
-    }
-
-    /** 一道题在复习视图里露出的东西：看到什么特征 → 填成什么。 */
-    data class Row(
+    /** 一道题的分析结果。这是小方向那一级唯一的输入。 */
+    data class Analysis(
         val uid: String,
-        val eye: String,
+        val formShape: String,
+        val basis: String?,
         val formContext: String?,
         val answer: String?,
         val stem: String?,
     )
 
-    /**
-     * 一个层级上的一组。
-     *
-     * [formRules] 就是这一组的输出：末端层是它自己的规则形态，
-     * 往上则是下层各组规则形态的并集——「上一阶段的输出变成这一阶段的输入」。
-     */
-    data class Group(
-        val kaodian: String,
-        val root: String,
-        val formRules: List<String>,
-        val children: List<String>,
-        val rows: List<Row>,
+    /** 一个板块。 */
+    data class Block(
+        val branch: Skeleton.Branch,
+        val analyses: List<Analysis>,
     ) {
-        val leafName: String get() = kaodian.substringAfterLast('/')
-        val size: Int get() = rows.size
+        val path: String get() = branch.path
+        val size: Int get() = analyses.size
     }
 
-    /** 有考点、有形态的记录才进复习；缺标注的留在原题页等着补。 */
-    fun countable(records: List<ErrorRecord>): List<ErrorRecord> =
-        records.filter { !it.kaodian.isNullOrBlank() }
+    /** 分析完并且归了类的才进得了板块；其余留在原题页。 */
+    fun analyzed(records: List<ErrorRecord>): List<ErrorRecord> =
+        records.filter { it.analyzed() && Skeleton.isBranch(it.branch) }
 
-    fun groups(
-        records: List<ErrorRecord>,
-        tree: KaodianTree? = null,
-        level: Level = Level.DEFAULT,
-    ): List<Group> {
-        val usable = countable(records)
-        return usable.groupBy { truncate(it.kaodian!!, level.depth) }
-            .map { (path, members) ->
-                Group(
-                    kaodian = path,
-                    root = path.substringBefore('/'),
-                    formRules = formRulesOf(path, members, tree),
-                    // 这一组下面还压着哪些更细的考点，用来说明它是由什么汇总来的
-                    children = members.mapNotNull { it.kaodian }.distinct().sorted()
-                        .filter { it != path },
-                    rows = members.filter { !it.eye.isNullOrBlank() }
-                        .map { Row(it.uid, it.eye!!, it.formContext, it.answer, it.stem) },
-                )
-            }
-            .sortedWith(compareBy({ it.root }, { it.kaodian }))
-    }
+    fun pending(records: List<ErrorRecord>): List<ErrorRecord> =
+        records.filterNot { it.analyzed() && Skeleton.isBranch(it.branch) }
 
     /**
-     * 这一组的答案形式。末端层直接取节点自带的规则形态；
-     * 往上则收集下层各条，去重后保序——那正是下一层要读的输入。
+     * 十九个板块，按骨架顺序。[includeEmpty] 为 false 时只给有题的那些。
      */
-    private fun formRulesOf(
-        path: String,
-        members: List<ErrorRecord>,
-        tree: KaodianTree?,
-    ): List<String> {
-        tree?.formRuleOf(path)?.let { return listOf(it) }
-        return members.mapNotNull { it.formRule?.takeIf { rule -> rule.isNotBlank() } }
-            .distinct()
+    fun blocks(records: List<ErrorRecord>, includeEmpty: Boolean = false): List<Block> {
+        val byBranch = analyzed(records).groupBy { Skeleton.branchOf(it.branch)!! }
+        return Skeleton.BRANCHES
+            .map { branch -> Block(branch, byBranch[branch].orEmpty().map { it.toAnalysis() }) }
+            .filter { includeEmpty || it.analyses.isNotEmpty() }
+    }
+
+    fun block(records: List<ErrorRecord>, branch: Skeleton.Branch): Block =
+        Block(branch, analyzed(records).filter { Skeleton.branchOf(it.branch) == branch }.map { it.toAnalysis() })
+
+    private fun ErrorRecord.toAnalysis() = Analysis(
+        uid = uid,
+        formShape = formShape.orEmpty(),
+        basis = basis,
+        formContext = formContext,
+        answer = answer,
+        stem = stem,
+    )
+
+    /** 交给模型的事实块：只给分析，不给题号，也不给任何统计。 */
+    fun facts(block: Block): String = buildString {
+        appendLine("板块：${block.path}")
+        appendLine("范围：${block.branch.scope}")
+        appendLine("这一支下 ${block.size} 道题的分析：")
+        block.analyses.forEach {
+            appendLine("- 答案形式：${it.formShape}｜依据：${it.basis ?: "无"}｜语境：${it.formContext ?: "无"}")
+        }
     }
 }
