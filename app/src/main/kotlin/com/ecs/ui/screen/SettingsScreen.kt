@@ -33,12 +33,12 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.ecs.core.model.ApiEndpoint
-import com.ecs.core.model.ModelCatalog
+import com.ecs.core.model.ModelDiscovery
 import com.ecs.core.model.Protocol
 import com.ecs.core.model.activeEndpoints
 import com.ecs.core.tree.Skeleton
 import com.ecs.core.tree.TopLevel
-import com.ecs.core.update.UpdateCheck
+import com.ecs.data.update.SignatureInfo
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.ApiKeyField
 import com.ecs.ui.component.Badge
@@ -60,55 +60,13 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
     val update by vm.updateResult.collectAsState()
 
     var editing by remember { mutableStateOf<ApiEndpoint?>(null) }
+    var advanced by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         BusyBar(busy)
 
-        // 填 Key 是首次使用的第一步，放在最上面
-        val active = activeEndpoints(endpoints, visionEndpoint, textEndpoint)
-        SectionCard("API Key") {
-            Text(
-                "识别、分析、汇总方向都要联网。下面是当前两档在用的端点，填完就能用。",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 6.dp),
-            )
-            if (active.isEmpty()) {
-                Text(
-                    "两档选中的端点都不在列表里，先到下方「API 端点」里选一个。",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            }
-            active.forEach { slot ->
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(slot.endpoint.name, style = MaterialTheme.typography.titleSmall)
-                    Badge(slot.label, MaterialTheme.colorScheme.primary)
-                    if (!slot.configured) Badge("待填", MaterialTheme.colorScheme.error)
-                }
-                if (slot.endpoint.note.isNotBlank()) {
-                    Text(
-                        slot.endpoint.note,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary,
-                    )
-                }
-                ApiKeyField(endpoint = slot.endpoint, onSave = vm::saveEndpoint)
-            }
-            if (active.isNotEmpty() && active.all { it.configured }) {
-                Text(
-                    "两档均已配置",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            }
-        }
+        // 首次使用只需要走完这一张卡：选厂商 → 填 Key → 自动拉模型 → 自动配好两档
+        ProviderCard(vm)
 
         SectionCard("提示词") {
             Text(
@@ -124,93 +82,108 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
             ) { Text("查看与编辑提示词") }
         }
 
-        SectionCard("视觉模型（识别用）") {
+        SectionCard(if (advanced) "高级" else "高级（手填模型 ID、自定义端点）") {
             Text(
-                "拍照识别题号、题干、括号提示词、选项版式走这个模型。Flash 系列免费，" +
-                    "录入频率是系统生命线，识别不该按次心疼。",
+                "上面那张卡覆盖绝大多数情况。中转站、本地 Ollama、厂商没实现 /models 时，" +
+                    "在这里手动指定端点与模型 ID——原来的配置方式一个没删。",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),
             )
-            SlotConfig(
-                endpoints = endpoints,
-                selectedEndpoint = visionEndpoint,
-                modelId = visionModel,
-                vision = true,
-                onEndpoint = vm::setVisionEndpoint,
-                onModel = vm::setVisionModel,
-                ready = vm.endpointReady(visionEndpoint),
-                onTest = { ep -> vm.testEndpoint(ep, visionModel) },
-                endpointOf = vm::endpointOf,
-            )
+            OutlinedButton(
+                onClick = { advanced = !advanced },
+                modifier = Modifier.padding(top = 8.dp),
+            ) { Text(if (advanced) "收起" else "展开") }
         }
 
-        SectionCard("文本模型（判断用）") {
-            Text(
-                "分析、小方向、大方向三级都走这个模型。分析质量直接决定复习页对不对，" +
-                    "这一档不建议为省钱降配。",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 6.dp),
-            )
-            SlotConfig(
-                endpoints = endpoints,
-                selectedEndpoint = textEndpoint,
-                modelId = textModel,
-                vision = false,
-                onEndpoint = vm::setTextEndpoint,
-                onModel = vm::setTextModel,
-                ready = vm.endpointReady(textEndpoint),
-                onTest = { ep -> vm.testEndpoint(ep, textModel) },
-                endpointOf = vm::endpointOf,
-            )
-        }
-
-        SectionCard("API 端点") {
-            Text(
-                "任何说 OpenAI 兼容或 Anthropic Messages 协议的服务都能接：" +
-                    "GLM、Kimi、MiniMax、海内外中转站。地址随便粘，会自动补全成完整请求路径。",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 6.dp),
-            )
-            endpoints.forEach { ep ->
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(ep.name, style = MaterialTheme.typography.titleSmall)
-                    Badge(ep.protocol.label, MaterialTheme.colorScheme.primary)
-                    if (ep.builtIn) Badge("预置", MaterialTheme.colorScheme.secondary)
-                    if (!ep.configured) Badge("缺 Key", MaterialTheme.colorScheme.error)
-                }
+        if (advanced) {
+            SectionCard("视觉模型（识别用）") {
                 Text(
-                    ep.url.ifBlank { "未填地址" },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.secondary,
+                    "拍照识别题号、题干、括号提示词、选项版式走这个模型。Flash 系列免费，" +
+                        "录入频率是系统生命线，识别不该按次心疼。",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 6.dp),
                 )
-                if (ep.note.isNotBlank()) {
-                    Text(ep.note, style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary)
-                }
-                ApiKeyField(endpoint = ep, onSave = vm::saveEndpoint)
-                Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { editing = ep }) { Text("改地址 / 协议") }
-                    if (!ep.builtIn) {
-                        TextButton(onClick = { vm.deleteEndpoint(ep.id) }) { Text("删除") }
+                SlotConfig(
+                    endpoints = endpoints,
+                    selectedEndpoint = visionEndpoint,
+                    modelId = visionModel,
+                    onEndpoint = vm::setVisionEndpoint,
+                    onModel = vm::setVisionModel,
+                    ready = vm.endpointReady(visionEndpoint),
+                    onTest = { ep -> vm.testEndpoint(ep, visionModel) },
+                    endpointOf = vm::endpointOf,
+                    suggestions = vm.modelsFor(visionEndpoint).filter { it.vision },
+                )
+            }
+
+            SectionCard("文本模型（判断用）") {
+                Text(
+                    "分析、小方向、大方向三级都走这个模型。分析质量直接决定复习页对不对，" +
+                        "这一档不建议为省钱降配。",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                SlotConfig(
+                    endpoints = endpoints,
+                    selectedEndpoint = textEndpoint,
+                    modelId = textModel,
+                    onEndpoint = vm::setTextEndpoint,
+                    onModel = vm::setTextModel,
+                    ready = vm.endpointReady(textEndpoint),
+                    onTest = { ep -> vm.testEndpoint(ep, textModel) },
+                    endpointOf = vm::endpointOf,
+                    suggestions = vm.modelsFor(textEndpoint),
+                )
+            }
+
+            SectionCard("API 端点") {
+                Text(
+                    "任何说 OpenAI 兼容或 Anthropic Messages 协议的服务都能接：" +
+                        "GLM、Kimi、MiniMax、海内外中转站。地址随便粘，会自动补全成完整请求路径。",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                endpoints.forEach { ep ->
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(ep.name, style = MaterialTheme.typography.titleSmall)
+                        Badge(ep.protocol.label, MaterialTheme.colorScheme.primary)
+                        if (ep.builtIn) Badge("预置", MaterialTheme.colorScheme.secondary)
+                        if (!ep.configured) Badge("缺 Key", MaterialTheme.colorScheme.error)
+                    }
+                    Text(
+                        ep.url.ifBlank { "未填地址" },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                    if (ep.note.isNotBlank()) {
+                        Text(ep.note, style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary)
+                    }
+                    ApiKeyField(endpoint = ep, onSave = vm::saveEndpoint)
+                    Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { editing = ep }) { Text("改地址 / 协议") }
+                        if (!ep.builtIn) {
+                            TextButton(onClick = { vm.deleteEndpoint(ep.id) }) { Text("删除") }
+                        }
                     }
                 }
+                Button(
+                    onClick = {
+                        editing = ApiEndpoint(
+                            id = "custom_${System.currentTimeMillis()}",
+                            name = "",
+                            baseUrl = "",
+                            protocol = Protocol.OPENAI,
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                ) { Text("新增端点") }
             }
-            Button(
-                onClick = {
-                    editing = ApiEndpoint(
-                        id = "custom_${System.currentTimeMillis()}",
-                        name = "",
-                        baseUrl = "",
-                        protocol = Protocol.OPENAI,
-                    )
-                },
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-            ) { Text("新增端点") }
         }
 
         SectionCard("板块与方向") {
@@ -262,13 +235,27 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),
             )
-            // v4.0.1 及更早每一版的签名都是构建机现场随机生成的 debug 密钥，
-            // 互相不同，Android 拒绝跨签名覆盖安装
-            if (UpdateCheck.compareVersions(vm.installedVersion, "4.1.0") < 0) {
+            // 判据是签名指纹本身，不是版本号：v4.0.1 及更早每一版都是构建机现场随机
+            // 生成的 debug 密钥，指纹互不相同，Android 拒绝跨签名覆盖安装
+            Text(
+                "签名指纹 ${SignatureInfo.short(vm.signatureFingerprint)}" +
+                    if (vm.signaturePinned) "　与 v4.1.0 起的固定证书一致" else "　不是固定证书",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (vm.signaturePinned) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            if (vm.signaturePinned) {
                 Text(
-                    "注意：你现在这一版（${vm.installedVersion}）和更早的版本签名不固定，" +
+                    "以后每一版都用同一张证书签，直接覆盖安装即可，数据不丢。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+            } else {
+                Text(
+                    "注意：你现在这一版（${vm.installedVersion}）的签名不是固定证书，" +
                         "新包装不上去，必须先卸载再装。卸载会清空本地数据，先到上面导出并分享出去。" +
-                        "从 v4.1.0 起签名固定，以后可以直接覆盖。",
+                        "从 v4.1.0 起签名固定，装上之后就能一直覆盖。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 8.dp),
@@ -340,18 +327,186 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
     }
 }
 
+/**
+ * 首次使用的全部：选厂商 → 填一个 Key → 自动拉这个 Key 能用的模型 → 两档各自动挑一个。
+ *
+ * 原来这一步要用户自己懂「端点」「协议」「模型 ID」，模型清单还写死在代码里，
+ * 厂商上新或改名就只能等发版。现在清单来自厂商本身，挑选也有默认答案，
+ * 想自己指定的人再去下面的「高级」。
+ */
+@Composable
+private fun ProviderCard(vm: AppViewModel) {
+    val endpoints by vm.endpoints.collectAsState()
+    val states by vm.models.collectAsState()
+    val visionEndpoint by vm.visionEndpoint.collectAsState()
+    val textEndpoint by vm.textEndpoint.collectAsState()
+    val visionModel by vm.visionModel.collectAsState()
+    val textModel by vm.textModel.collectAsState()
+    val locked by vm.keyLocked.collectAsState()
+
+    // 默认落在识别那一档的厂商上：录入是第一步，识别先跑起来
+    var picked by remember(visionEndpoint) { mutableStateOf(visionEndpoint) }
+    val endpoint = endpoints.firstOrNull { it.id == picked }
+        ?: endpoints.firstOrNull()
+        ?: return
+    val state = states[endpoint.id]
+
+    SectionCard("厂商与模型") {
+        Text(
+            "选一个厂商，填一个 API Key，其余自动完成：会去问厂商这个 Key 能用哪些模型，" +
+                "再给识别（视觉）与判断（文本）两档各挑一个，挑完就能开始录入。",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            endpoints.forEach { ep ->
+                FilterChip(
+                    selected = ep.id == endpoint.id,
+                    onClick = { picked = ep.id },
+                    label = { Text(ep.name) },
+                )
+            }
+        }
+        if (endpoint.note.isNotBlank()) {
+            Text(
+                endpoint.note,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+
+        // 保存 Key 就顺手把两档配好，用户不需要再点第二下
+        ApiKeyField(
+            endpoint = endpoint,
+            onSave = { saved -> vm.useProvider(saved, force = true) },
+            locked = locked,
+            onLockChange = vm::setKeyLocked,
+        )
+
+        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { vm.useProvider(endpoint, force = true) },
+                enabled = endpoint.configured,
+            ) { Text("自动配置") }
+            OutlinedButton(
+                onClick = { vm.fetchModels(endpoint.id) },
+                enabled = endpoint.configured,
+            ) { Text("重拉清单") }
+        }
+
+        val hint = when (state) {
+            AppViewModel.ModelsState.Loading -> "正在问厂商有哪些模型…"
+            is AppViewModel.ModelsState.Loaded ->
+                "${state.models.size} 个可用模型" + if (state.cached) "（上次拉到的，联网后可重拉）" else ""
+            is AppViewModel.ModelsState.Failed -> state.message
+            else -> if (endpoint.configured) "还没拉过清单，点「自动配置」即可" else "先填 Key"
+        }
+        Text(
+            hint,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (state is AppViewModel.ModelsState.Failed) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.secondary,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        if (state is AppViewModel.ModelsState.Failed) {
+            Text(
+                "清单拉不到不影响使用：下面是内置与上次拉到的候选，也可以在「高级」里手填 ID。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.secondary,
+            )
+        }
+
+        val available = vm.modelsFor(endpoint.id)
+        ModelPicker(
+            title = "识别（视觉）",
+            models = available.filter { it.vision },
+            selected = if (visionEndpoint == endpoint.id) visionModel else "",
+            empty = "这个厂商没有能看图的模型，识别要选别的厂商",
+            onPick = { id ->
+                vm.setVisionEndpoint(endpoint.id)
+                vm.setVisionModel(id)
+            },
+        )
+        ModelPicker(
+            title = "判断（文本）",
+            models = available,
+            selected = if (textEndpoint == endpoint.id) textModel else "",
+            empty = "还没有候选，先拉一次清单",
+            onPick = { id ->
+                vm.setTextEndpoint(endpoint.id)
+                vm.setTextModel(id)
+            },
+        )
+
+        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        val nameOf = { id: String -> endpoints.firstOrNull { it.id == id }?.name ?: id }
+        Text(
+            "当前：识别 $visionModel（${nameOf(visionEndpoint)}）　判断 $textModel（${nameOf(textEndpoint)}）",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        val ready = activeEndpoints(endpoints, visionEndpoint, textEndpoint)
+        if (ready.isEmpty() || ready.any { !it.configured }) {
+            Text(
+                "还有档位缺 Key：" + ready.filterNot { it.configured }
+                    .joinToString("、") { "${it.endpoint.name}（${it.label}）" }
+                    .ifBlank { "两档选中的端点都不在列表里" },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+/** 一行可横滑的模型 chips。清单来自厂商，所以这里不做任何写死的过滤。 */
+@Composable
+private fun ModelPicker(
+    title: String,
+    models: List<ModelDiscovery.RemoteModel>,
+    selected: String,
+    empty: String,
+    onPick: (String) -> Unit,
+) {
+    Text(
+        title,
+        style = MaterialTheme.typography.labelSmall,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    if (models.isEmpty()) {
+        Text(empty, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
+        return
+    }
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        models.forEach { model ->
+            FilterChip(
+                selected = model.id == selected,
+                onClick = { onPick(model.id) },
+                label = { Text(model.label + if (model.note.isNotBlank()) "·${model.note}" else "") },
+            )
+        }
+    }
+}
+
 /** 一个档位 = 端点 + 模型 ID。两段都自由，清单只是建议值。 */
 @Composable
 private fun SlotConfig(
     endpoints: List<ApiEndpoint>,
     selectedEndpoint: String,
     modelId: String,
-    vision: Boolean,
     onEndpoint: (String) -> Unit,
     onModel: (String) -> Unit,
     ready: Boolean,
     onTest: (ApiEndpoint) -> Unit,
     endpointOf: (String) -> ApiEndpoint?,
+    suggestions: List<ModelDiscovery.RemoteModel>,
 ) {
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp),
@@ -366,7 +521,7 @@ private fun SlotConfig(
         }
     }
 
-    val suggestions = ModelCatalog.suggestionsFor(selectedEndpoint, vision)
+    // 候选来自「拉到的清单 → 上次拉到的 → 内置清单」，不再只有写死的那一份
     if (suggestions.isNotEmpty()) {
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp),

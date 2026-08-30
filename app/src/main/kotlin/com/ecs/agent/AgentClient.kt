@@ -2,6 +2,7 @@ package com.ecs.agent
 
 import com.ecs.core.model.ApiEndpoint
 import com.ecs.core.model.ModelCatalog
+import com.ecs.core.model.ModelDiscovery
 import com.ecs.core.model.Protocol
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -141,6 +142,41 @@ open class AgentClient(
         )
         "连通：${endpoint.url}　模型回了「${reply.trim().take(20)}」"
     }
+
+    /**
+     * 拉这个 Key 实际能用的模型清单。厂商上新、改名、下线都不用再等发版，
+     * 用户也不用去官网抄 ID。拉不到就抛，上层退回静态清单，不清掉已有配置。
+     */
+    open suspend fun listModels(endpoint: ApiEndpoint): List<ModelDiscovery.RemoteModel> =
+        withContext(Dispatchers.IO) {
+            if (endpoint.baseUrl.isBlank()) throw AgentException("${endpoint.name} 未填地址")
+            if (endpoint.apiKey.isBlank()) throw AgentException("${endpoint.name} 未配置 API Key")
+
+            val url = ModelDiscovery.modelsUrl(endpoint.baseUrl, endpoint.protocol)
+            val builder = Request.Builder().url(url).get()
+            when (endpoint.protocol) {
+                Protocol.OPENAI -> builder.addHeader("Authorization", "Bearer ${endpoint.apiKey}")
+                Protocol.ANTHROPIC -> {
+                    builder.addHeader("x-api-key", endpoint.apiKey)
+                    builder.addHeader("anthropic-version", ANTHROPIC_VERSION)
+                }
+            }
+
+            try {
+                http.newCall(builder.build()).execute().use { resp ->
+                    val text = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        // 有的中转站压根没实现 /models，这里要说清楚是清单接口不通，不是 Key 不对
+                        throw AgentException("拉模型清单失败 ${resp.code}（$url）：${text.take(200)}")
+                    }
+                    ModelDiscovery.parse(text).ifEmpty {
+                        throw AgentException("$url 返回的清单里没有可用模型")
+                    }
+                }
+            } catch (e: InterruptedIOException) {
+                throw AgentException("拉模型清单超时（$url），检查地址和网络")
+            }
+        }
 
     // ---------- 请求体 ----------
 

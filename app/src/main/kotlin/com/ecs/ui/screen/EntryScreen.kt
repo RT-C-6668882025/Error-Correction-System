@@ -67,6 +67,8 @@ private fun KeyBar(vm: AppViewModel) {
     val visionEndpoint by vm.visionEndpoint.collectAsState()
     val textEndpoint by vm.textEndpoint.collectAsState()
     val locked by vm.keyLocked.collectAsState()
+    val visionModel by vm.visionModel.collectAsState()
+    val textModel by vm.textModel.collectAsState()
 
     val active = activeEndpoints(endpoints, visionEndpoint, textEndpoint)
     val missing = active.filterNot { it.configured }
@@ -75,7 +77,7 @@ private fun KeyBar(vm: AppViewModel) {
     SectionCard(if (allReady) "API" else "还不能识别：先填 API Key") {
         if (!allReady) {
             Text(
-                "拍照识别要联网。下面是当前在用的端点，填完就能拍。",
+                "拍照识别要联网。填完 Key 会自动去问厂商有哪些模型，识别与判断两档自动配好。",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),
             )
@@ -98,11 +100,20 @@ private fun KeyBar(vm: AppViewModel) {
                     color = MaterialTheme.colorScheme.secondary,
                 )
             }
+            // 填完就自动拉模型、自动配好两档：这里是新用户的第一站，不该再让他去设置页选模型
             ApiKeyField(
                 endpoint = slot.endpoint,
-                onSave = vm::saveEndpoint,
+                onSave = { saved -> vm.useProvider(saved) },
                 locked = locked,
                 onLockChange = vm::setKeyLocked,
+            )
+        }
+        if (allReady) {
+            Text(
+                "识别 $visionModel　判断 $textModel",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.padding(top = 4.dp),
             )
         }
     }

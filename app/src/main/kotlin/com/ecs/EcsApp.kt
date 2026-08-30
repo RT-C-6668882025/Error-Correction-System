@@ -15,6 +15,7 @@ import com.ecs.data.repo.PromptStore
 import com.ecs.data.repo.RecordRepository
 import com.ecs.data.repo.Settings
 import com.ecs.data.repo.DirectionStore
+import com.ecs.data.update.SignatureInfo
 import com.ecs.data.update.UpdateChecker
 import kotlinx.coroutines.flow.first
 
@@ -34,6 +35,7 @@ class Container(app: Application) {
     val directionStore = DirectionStore(app)
     val promptStore = PromptStore(app)
     val updateChecker = UpdateChecker(app)
+    val signature = SignatureInfo(app)
     private val backup = BackupManager(app)
 
     val repository = RecordRepository(

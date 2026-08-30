@@ -53,7 +53,7 @@ logic-tests/              独立 JVM 构建：编译 core/ 与 agent/ 并跑单�
 算法层可以脱离 Android SDK 单独验证：
 
 ```bash
-./gradlew -p logic-tests test      # 66 个用例
+./gradlew -p logic-tests test      # 192 个用例
 ```
 
 `logic-tests` 是独立构建，把 `app/src/main/kotlin/com/ecs/core` 与 `.../agent`
@@ -61,7 +61,7 @@ logic-tests/              独立 JVM 构建：编译 core/ 与 agent/ 并跑单�
 
 ## CI 与发版
 
-`.github/workflows/ci.yml` —— 每次 push 与 PR：跑算法层 66 个用例，构建 debug APK，
+`.github/workflows/ci.yml` —— 每次 push 与 PR：跑算法层 192 个用例，构建 debug APK，
 两者都作为 artifact 上传。算法层那个 job 不需要 Android SDK，几十秒出结果。
 
 `.github/workflows/release.yml` —— 打 `v*` tag 触发（也可手动 `workflow_dispatch` 传版本号）：
@@ -83,6 +83,20 @@ git tag v1.0.0 && git push origin v1.0.0
 | `KEYSTORE_PASSWORD` | keystore 口令 |
 | `KEY_ALIAS` | 密钥别名 |
 | `KEY_PASSWORD` | 密钥口令 |
+
+**签名指纹是硬门禁。** 正式证书的 SHA-256 钉在 `signing/release-cert-sha256.txt`，
+自 v4.1.0 起固定为 `c659446f…95e3`。发版流程构建完 APK 就跑
+`scripts/verify-apk-cert.sh` 比对，不一致（或本次退回了 debug 密钥）直接失败，
+包发不出去——因为指纹一变，所有老用户都得卸载重装，本地数据一起没。
+
+下载到包的人也能自己验，不需要 Android SDK（没有 `apksigner` 时会退回
+`scripts/apk_cert_sha256.py`，只用 Python 标准库读 APK Signing Block v2/v3）：
+
+```bash
+scripts/verify-apk-cert.sh ecs-4.1.0.apk
+```
+
+应用内同样能看：设置 → 检查更新，那里显示已装包的真实指纹以及它是否就是这张固定证书。
 
 ## 关键实现取舍
 
@@ -124,15 +138,25 @@ https://open.bigmodel.cn/api/paas/v4 → …/v4/chat/completions
 https://relay.com/v1  (Anthropic) → https://relay.com/v1/messages
 ```
 
-**Key 填在设置页最上面第一张卡片**，只列当前两档在用的端点，填完就能用；
+**选厂商 + 填一个 Key 就能开始用。** 设置页第一张卡片「厂商与模型」是首次使用的全部：
+选一个厂商、填 Key，客户端就去问厂商这个 Key 能用哪些模型（`/models`，两种协议都有），
+再给识别（视觉）与判断（文本）两档各自动挑一个——视觉挑便宜的，文本挑强的，
+挑不出视觉模型（DeepSeek、MiniMax 这类纯文本厂商）会明说，识别档留在原处不动。
+录入页顶部填 Key 也走同一条路径，区别只有一个：那里不会动已经配好并在用另一个厂商的档位，
+免得「视觉走智谱、判断走 Anthropic」这种搭配被顺手拆掉。
+
+拉到的清单存在本地，离线打开设置页照样有候选可选；厂商没实现 `/models`、
+中转站不通、或者就是想手填 ID，展开「高级」——端点、协议、模型 ID 的手动配置一个没删。
+`ModelDiscovery` 里的解析、视觉判定与挑选都是纯函数，在 logic-tests 里有用例。
+
 端点列表里每项也各带一个 Key 输入框，两处是同一份数据，改一处另一处跟着变。
 两档任一缺 Key 时，首页会显示「还没填 API Key」并给出直达入口。
 
-预置四个端点（Anthropic、智谱 GLM、Kimi、MiniMax），URL 与 Key 都可改、不可删。
+预置六个端点（Anthropic、智谱 GLM、Kimi、DeepSeek、MiniMax、本地 / 局域网），URL 与 Key 都可改、不可删。
 每个端点有「测试连接」按钮：地址、协议、Key 三者错任一个报错都长得一样，
 这个按钮把原始状态码和响应片段直接摆出来。
 
-模型分两档，各自选端点 + 填模型 ID：
+模型分两档。默认由上面那步自动挑，也可以在「高级」里各自选端点 + 填模型 ID：
 
 | 档位 | 用途 | 默认 |
 |---|---|---|
