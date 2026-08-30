@@ -63,18 +63,32 @@ class DirectionBuilder(
     /**
      * 大方向的输入负载。这里只允许出现小方向的 scope 与它那棵树——
      * 一旦掺进原题字段，这一级就不再是「读上一级的输出」了。
+     *
+     * 送的是每棵树的压缩视图（骨架 + 去重后的末端清单），不是整棵树的全文渲染：
+     * 十九个板块的树全文拼起来足以把上下文占满，而其中大量是重复的中间层。
+     * 这一级要判断的是「哪些板块在考同一种判断」，骨架与末端清单就够了，
+     * 细枝末节本来就该留在小方向里。
      */
     fun majorInput(minors: List<Direction>): String = buildString {
         appendLine("以下是每个板块已经汇总好的小方向，按大类排列。")
-        appendLine("你的输入只有这些树，没有原题。")
+        appendLine("每个板块给的是它那棵树的骨架与去重后的末端，没有原题。")
         appendLine()
         TopLevel.all.forEach { root ->
             val inRoot = minors.filter { it.scope.substringBefore('/') == root }
             if (inRoot.isEmpty()) return@forEach
             appendLine("# $root")
-            inRoot.forEach {
-                appendLine("## ${it.scope}")
-                appendLine(it.render())
+            inRoot.forEach { direction ->
+                appendLine("## ${direction.scope}（由 ${direction.fromCount} 条分析汇总）")
+                direction.skeleton().takeIf { it.isNotEmpty() }?.let {
+                    appendLine("骨架：${it.joinToString("／")}")
+                }
+                val leaves = direction.leafLines()
+                appendLine("末端（${leaves.size} 条，已去重）：")
+                leaves.take(LEAF_CAP).forEach { appendLine("- $it") }
+                // 超出的不是丢掉，是留在小方向那一层——这一级本来就不该重复细节
+                if (leaves.size > LEAF_CAP) {
+                    appendLine("（另有 ${leaves.size - LEAF_CAP} 条更细的留在这个板块的小方向里）")
+                }
                 appendLine()
             }
         }
@@ -83,4 +97,9 @@ class DirectionBuilder(
     /** 解析与清洗分开做，可脱离网络单独测。 */
     fun parseNodes(raw: String): List<DirectionNode> =
         Direction.clean(client.decode(raw, ListSerializer(DirectionNode.serializer())))
+
+    companion object {
+        /** 单个小方向往上送的末端条数上限。输入侧的界，输出侧的 maxTokens 与深度不动。 */
+        const val LEAF_CAP = 30
+    }
 }
