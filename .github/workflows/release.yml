@@ -91,9 +91,23 @@ jobs:
             echo "签名证书 SHA-256: $FP"
             echo "fingerprint=$FP" >> "$GITHUB_OUTPUT"
           else
-            echo "找不到 apksigner，跳过指纹"
+            echo "找不到 apksigner，交给下一步的脚本去读"
             echo "fingerprint=" >> "$GITHUB_OUTPUT"
           fi
+
+      # 门禁：签名必须还是 v4.1.0 那张证书。指纹一变，所有老用户都得卸载重装，
+      # 这种包宁可发不出去，也不能发出去之后才发现。
+      - name: 校验签名指纹
+        id: verify
+        run: |
+          if [ "${{ steps.signing.outputs.signed }}" != "true" ]; then
+            echo "::error::本次退回 debug 密钥签名，签名不固定，拒绝发版。配置 KEYSTORE_BASE64 后重试。"
+            exit 1
+          fi
+          bash scripts/verify-apk-cert.sh "${{ steps.apk.outputs.path }}"
+          FP="${{ steps.cert.outputs.fingerprint }}"
+          [ -n "$FP" ] || FP=$(python3 scripts/apk_cert_sha256.py "${{ steps.apk.outputs.path }}" | head -1)
+          echo "fingerprint=$FP" >> "$GITHUB_OUTPUT"
 
       - name: 写发版说明
         run: |
@@ -108,13 +122,14 @@ jobs:
             echo "- APK: \`${{ steps.apk.outputs.path }}\`"
             echo "- SHA256: \`${{ steps.apk.outputs.sha256 }}\`"
             echo "- versionCode: ${{ github.run_number }}"
-            if [ -n "${{ steps.cert.outputs.fingerprint }}" ]; then
-              echo "- 签名证书 SHA-256: \`${{ steps.cert.outputs.fingerprint }}\`"
+            if [ -n "${{ steps.verify.outputs.fingerprint }}" ]; then
+              echo "- 签名证书 SHA-256: \`${{ steps.verify.outputs.fingerprint }}\`（与 v4.1.0 起钉住的证书一致，已在发版流程里校验）"
             fi
             echo
             if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
-              echo "> 用固定密钥签名。只要上面的签名证书指纹和你已装版本一致，"
-              echo "> 就能直接覆盖安装，数据不丢。"
+              echo "> 用固定密钥签名。上面的指纹由发版流程逐字比对过 \`signing/release-cert-sha256.txt\`，"
+              echo "> 不一致就发不出来，所以从 v4.1.0 起的任意两版之间都能直接覆盖安装，数据不丢。"
+              echo "> 想自己验：\`scripts/verify-apk-cert.sh ecs-${{ steps.version.outputs.version }}.apk\`。"
               echo ">"
               echo "> **从 v4.0.1 及更早版本升级需要先卸载**：那些版本每次构建都用构建机"
               echo "> 现场随机生成的 debug 密钥，签名互不相同，Android 不允许跨签名覆盖。"

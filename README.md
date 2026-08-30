@@ -84,6 +84,20 @@ git tag v1.0.0 && git push origin v1.0.0
 | `KEY_ALIAS` | 密钥别名 |
 | `KEY_PASSWORD` | 密钥口令 |
 
+**签名指纹是硬门禁。** 正式证书的 SHA-256 钉在 `signing/release-cert-sha256.txt`，
+自 v4.1.0 起固定为 `c659446f…95e3`。发版流程构建完 APK 就跑
+`scripts/verify-apk-cert.sh` 比对，不一致（或本次退回了 debug 密钥）直接失败，
+包发不出去——因为指纹一变，所有老用户都得卸载重装，本地数据一起没。
+
+下载到包的人也能自己验，不需要 Android SDK（没有 `apksigner` 时会退回
+`scripts/apk_cert_sha256.py`，只用 Python 标准库读 APK Signing Block v2/v3）：
+
+```bash
+scripts/verify-apk-cert.sh ecs-4.1.0.apk
+```
+
+应用内同样能看：设置 → 检查更新，那里显示已装包的真实指纹以及它是否就是这张固定证书。
+
 ## 关键实现取舍
 
 **原题是唯一数据源。** v2 明确不存原题，理由是「让任何模型不接触原题也能诊断」。

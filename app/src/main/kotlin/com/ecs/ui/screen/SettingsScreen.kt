@@ -38,7 +38,7 @@ import com.ecs.core.model.Protocol
 import com.ecs.core.model.activeEndpoints
 import com.ecs.core.tree.Skeleton
 import com.ecs.core.tree.TopLevel
-import com.ecs.core.update.UpdateCheck
+import com.ecs.data.update.SignatureInfo
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.ApiKeyField
 import com.ecs.ui.component.Badge
@@ -262,13 +262,27 @@ fun SettingsScreen(vm: AppViewModel, nav: NavHostController) {
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 6.dp),
             )
-            // v4.0.1 及更早每一版的签名都是构建机现场随机生成的 debug 密钥，
-            // 互相不同，Android 拒绝跨签名覆盖安装
-            if (UpdateCheck.compareVersions(vm.installedVersion, "4.1.0") < 0) {
+            // 判据是签名指纹本身，不是版本号：v4.0.1 及更早每一版都是构建机现场随机
+            // 生成的 debug 密钥，指纹互不相同，Android 拒绝跨签名覆盖安装
+            Text(
+                "签名指纹 ${SignatureInfo.short(vm.signatureFingerprint)}" +
+                    if (vm.signaturePinned) "　与 v4.1.0 起的固定证书一致" else "　不是固定证书",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (vm.signaturePinned) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            if (vm.signaturePinned) {
                 Text(
-                    "注意：你现在这一版（${vm.installedVersion}）和更早的版本签名不固定，" +
+                    "以后每一版都用同一张证书签，直接覆盖安装即可，数据不丢。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+            } else {
+                Text(
+                    "注意：你现在这一版（${vm.installedVersion}）的签名不是固定证书，" +
                         "新包装不上去，必须先卸载再装。卸载会清空本地数据，先到上面导出并分享出去。" +
-                        "从 v4.1.0 起签名固定，以后可以直接覆盖。",
+                        "从 v4.1.0 起签名固定，装上之后就能一直覆盖。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 8.dp),

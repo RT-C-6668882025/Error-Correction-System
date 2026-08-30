@@ -101,6 +101,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     val installedVersion: String get() = container.updateChecker.installedVersion()
 
+    /** 已装包的签名指纹，和发版说明里那一行对得上就能直接覆盖安装。 */
+    val signatureFingerprint: String? by lazy { container.signature.fingerprint() }
+
+    val signaturePinned: Boolean by lazy { container.signature.matchesPinned() }
+
     init {
         viewModelScope.launch {
             container.directionStore.load()
