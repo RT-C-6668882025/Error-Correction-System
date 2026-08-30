@@ -53,7 +53,7 @@ logic-tests/              独立 JVM 构建：编译 core/ 与 agent/ 并跑单�
 算法层可以脱离 Android SDK 单独验证：
 
 ```bash
-./gradlew -p logic-tests test      # 192 个用例
+./gradlew -p logic-tests test      # 219 个用例
 ```
 
 `logic-tests` 是独立构建，把 `app/src/main/kotlin/com/ecs/core` 与 `.../agent`
@@ -61,7 +61,7 @@ logic-tests/              独立 JVM 构建：编译 core/ 与 agent/ 并跑单�
 
 ## CI 与发版
 
-`.github/workflows/ci.yml` —— 每次 push 与 PR：跑算法层 192 个用例，构建 debug APK，
+`.github/workflows/ci.yml` —— 每次 push 与 PR：跑算法层 219 个用例，构建 debug APK，
 两者都作为 artifact 上传。算法层那个 job 不需要 Android SDK，几十秒出结果。
 
 `.github/workflows/release.yml` —— 打 `v*` tag 触发（也可手动 `workflow_dispatch` 传版本号）：
@@ -119,6 +119,26 @@ v3 推翻了这一条：题干和答案都落库，因为换模型重跑标注�
 
 **id 与主键分开。** `id` 只含题型+题号+空序，跨卷必然重复；Room 主键用
 `uid = "{paper}#{id}"`。
+
+**递归总结要收敛，靠的是压缩而不是靠模型自觉。** 两级汇总的输入都先过一遍确定性压缩：
+小方向那一级按坑归并（`core/agg/Compressor`）——同一种答案形式合成一条并带上题数，
+组内依据与语境各自去重计数，只留频次最高的几条，形态种类超上限时尾部只留形态名；
+大方向那一级不送整棵树的全文，改送「骨架 + 去重后的末端清单」（`Direction.skeleton/leafLines`），
+单个板块的末端超过 `LEAF_CAP` 就截断。于是送出去的体积随**形态种类数**增长，
+而不再随题数增长：47 题三种形态是十二行，300 题十二种形态还是十几行。
+
+归并只抹写法上的差别（空白、全角标点、句末句号、大小写），不做语义归并——
+近义词和编辑距离一律不碰，那才会把两个不同的坑并成一个。排序是频次降序、
+同频保持首次出现顺序，所以同一批输入永远压出同一个结果，可以钉成测试。
+频次和被砍掉的统计层不是一回事：它答的是「哪几种形态是这一支的主线」，
+不是「你错得怎么样」，所以事实块里仍然没有题号、错误率、加权、难度。
+
+**推理型模型的正文可能不在 content 里。** DeepSeek 的 pro 档、各家 thinking 系列
+把思考放在 `reasoning_content`，`content` 可能是空串；照直往下走，报出来的是一句
+「响应中没有 JSON」，看不出真正发生了什么。`extractText` 现在会回退去读思考字段，
+两处都空就直接说是模型没给正文、多半是 max_tokens 不够或这个模型不适合结构化输出。
+分析那一步的 max_tokens 也从 1024 提到 3072——推理档会先烧掉一大截，
+JSON 还没开头就被截断。解析失败也纳入已有的那圈重试。
 
 **本地 embedding。** 字符 n-gram 哈希，离线、确定性。它算的是字面重合度而非语义相似度；
 够用是因为检索只负责挑 5 个候选，判断在 Agent 手里。

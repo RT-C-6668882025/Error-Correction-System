@@ -10,6 +10,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -268,20 +269,32 @@ open class AgentClient(
 
     // ---------- 取值 ----------
 
-    /** 两种协议的正文路径不同；思考型模型的推理过程不在 content 里，取到的就是答案。 */
+    /**
+     * 两种协议的正文路径不同。
+     *
+     * 推理型模型（DeepSeek 的 pro 档、各家的 thinking 系列）把思考放在 `reasoning_content`，
+     * 而 `content` 可能是空串——上层拿到空字符串去找 JSON，报出来的是一句
+     * 「响应中没有 JSON」，看不出真正发生了什么。所以这里 content 空了就回退去读思考，
+     * 两处都空则直接说清楚是模型没给正文，而不是让错误顺着流到解析层。
+     */
     fun extractText(raw: String, protocol: Protocol): String {
         val root = json.parseToJsonElement(raw).jsonObject
-        return if (protocol == Protocol.OPENAI) {
-            root["choices"]?.jsonArray?.firstOrNull()
-                ?.jsonObject?.get("message")?.jsonObject
-                ?.get("content")?.jsonPrimitive?.content
-                ?: throw AgentException("响应缺少 choices[0].message.content")
-        } else {
-            root["content"]?.jsonArray
+        if (protocol != Protocol.OPENAI) {
+            return root["content"]?.jsonArray
                 ?.mapNotNull { it.jsonObject["text"]?.jsonPrimitive?.content }
                 ?.joinToString("\n")
+                ?.ifBlank { throw AgentException(NO_BODY) }
                 ?: throw AgentException("响应缺少 content")
         }
+
+        val message = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject?.get("message")?.jsonObject
+            ?: throw AgentException("响应缺少 choices[0].message")
+        fun field(name: String) = message[name]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        // 有的中转站把结构化输出放在 content 之外的字段里，一并认了
+        return field("content")
+            ?: field("reasoning_content")
+            ?: field("reasoning")
+            ?: throw AgentException(NO_BODY)
     }
 
     /** 模型偶尔会在 JSON 外包一层解释或围栏，这里只取第一个完整对象/数组。 */
@@ -320,6 +333,10 @@ open class AgentClient(
     fun arr(raw: String): JsonArray = json.parseToJsonElement(extractJson(raw)).jsonArray
 
     companion object {
+        /** 模型只吐了思考、或者干脆什么都没吐。说清楚该往哪儿改，别让它变成一句「没有 JSON」。 */
+        const val NO_BODY = "模型没有返回正文（只有思考或空响应）：多半是 max_tokens 不够被截断，" +
+            "或这个模型不适合结构化输出——换一个非推理档的模型试试"
+
         private const val ANTHROPIC_VERSION = "2023-06-01"
         private val JSON_MEDIA = "application/json".toMediaType()
     }

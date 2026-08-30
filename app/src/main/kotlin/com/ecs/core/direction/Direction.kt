@@ -40,8 +40,36 @@ data class Direction(
 ) {
     val empty: Boolean get() = nodes.isEmpty()
 
-    /** 末端的形态规则，按出现顺序去重。上一级要读的就是这个。 */
+    /** 末端的形态规则，按出现顺序去重。 */
     fun rules(): List<String> = leaves().mapNotNull { it.rule?.takeIf { r -> r.isNotBlank() } }.distinct()
+
+    /**
+     * 骨架：每条通向末端的路径，末端以上那一段，去重保序。
+     *
+     * 上一级要看的是这一支长成什么结构，不是逐字重读整棵树。
+     */
+    fun skeleton(): List<String> = paths().mapNotNull { path ->
+        path.dropLast(1).takeIf { it.isNotEmpty() }?.joinToString(" › ") { it.name }
+    }.distinct()
+
+    /**
+     * 末端清单：`考点名　形态规则`，去重保序。
+     *
+     * 带着考点名，是因为名字本身就是要保留的信息——只送规则字符串，
+     * 上一级就只剩一堆无主的句子，那才叫把考点抽象掉了。
+     */
+    fun leafLines(): List<String> = paths().map { path ->
+        val leaf = path.last()
+        leaf.rule?.takeIf { it.isNotBlank() }?.let { "${leaf.name}　$it" } ?: leaf.name
+    }.distinct()
+
+    /** 根到每个末端的完整路径。 */
+    private fun paths(): List<List<DirectionNode>> = nodes.flatMap { pathsOf(it, emptyList()) }
+
+    private fun pathsOf(node: DirectionNode, prefix: List<DirectionNode>): List<List<DirectionNode>> {
+        val here = prefix + node
+        return if (node.leaf) listOf(here) else node.children.flatMap { pathsOf(it, here) }
+    }
 
     fun leaves(): List<DirectionNode> = nodes.flatMap { leavesOf(it) }
 

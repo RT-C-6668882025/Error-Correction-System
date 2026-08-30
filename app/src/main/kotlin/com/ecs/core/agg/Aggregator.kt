@@ -72,13 +72,37 @@ object Aggregator {
         stem = stem,
     )
 
-    /** 交给模型的事实块：只给分析，不给题号，也不给任何统计。 */
-    fun facts(block: Block): String = buildString {
-        appendLine("板块：${block.path}")
-        appendLine("范围：${block.branch.scope}")
-        appendLine("这一支下 ${block.size} 道题的分析：")
-        block.analyses.forEach {
-            appendLine("- 答案形式：${it.formShape}｜依据：${it.basis ?: "无"}｜语境：${it.formContext ?: "无"}")
+    /**
+     * 交给模型的事实块：只给分析，不给题号。
+     *
+     * 送出去之前先按坑归并（[Compressor]）：同一种答案形式重复几十遍对判断没有任何帮助，
+     * 只会把上下文占满。压缩后体积随形态种类数增长，不再随题数增长。
+     *
+     * 括号里的数字是频次——它答的是「哪几种形态是这一支的主线」，
+     * 和被砍掉的那套统计层（错误率、加权失分、难度）不是一回事，后者答的是「你错得怎么样」。
+     */
+    fun facts(block: Block, limits: Compressor.Limits = Compressor.Limits()): String {
+        val out = Compressor.compress(block, limits)
+        return buildString {
+            appendLine("板块：${block.path}")
+            appendLine("范围：${block.branch.scope}")
+            appendLine("这一支下 ${out.total} 道题，去重后 ${out.kinds} 种答案形式。")
+            appendLine("括号里的数字是支撑它的题数，只用来判断哪些形态是主线，不要写进输出。")
+            appendLine()
+            out.pits.forEachIndexed { i, pit ->
+                appendLine("${i + 1}. ${pit.shape}（${pit.count} 题）")
+                if (pit.bases.isNotEmpty()) appendLine("   依据：${evidenceLine(pit.bases)}")
+                if (pit.contexts.isNotEmpty()) appendLine("   语境：${evidenceLine(pit.contexts)}")
+            }
+            if (out.tail.isNotEmpty()) {
+                // 尾巴只留形态名：覆盖不丢，体积有界
+                val most = out.tail.first().count
+                val note = if (most <= 1) "各 1 题" else "每种不超过 $most 题"
+                appendLine("其余 ${out.tail.size} 种形态（$note）：" + out.tail.joinToString("；") { it.shape })
+            }
         }
     }
+
+    private fun evidenceLine(items: List<Compressor.Evidence>): String =
+        items.joinToString("／") { if (it.count > 1) "${it.text}（${it.count}）" else it.text }
 }

@@ -54,14 +54,23 @@ class Analyzer(
         """.trimIndent()
 
         var last: Output? = null
+        var failure: Exception? = null
         repeat(2) { attempt ->
-            val raw = client.complete(
-                system = systemPrompt(input.options.isNotEmpty()) + retryHint(last),
-                user = user,
-                maxTokens = 1024,
-                temperature = if (attempt == 0) 0.0 else 0.3,
-            )
-            val out = parse(raw)
+            // 解析炸了也值得再要一次：推理型模型第一次常常把话说在 JSON 外面，
+            // 原来这里直接抛出去，整条题就废了，而它其实只是没按格式说话
+            val out = try {
+                val raw = client.complete(
+                    system = systemPrompt(input.options.isNotEmpty()) + retryHint(last, failure),
+                    user = user,
+                    maxTokens = MAX_TOKENS,
+                    temperature = if (attempt == 0) 0.0 else 0.3,
+                )
+                parse(raw)
+            } catch (e: Exception) {
+                failure = e
+                return@repeat
+            }
+            failure = null
             last = out
             // 归不进板块的这条题在复习页无处可去，等于白分析——值得再要一次。
             // 依据写砸了同理：整条数据就没法用了。
@@ -72,7 +81,7 @@ class Analyzer(
                 return out
             }
         }
-        return last!!
+        return last ?: throw failure ?: EmptyResult("模型没有给出可用的分析")
     }
 
     /** 解析与校验分开做：可复现，也可以脱离网络单独测。 */
@@ -108,7 +117,11 @@ class Analyzer(
     }
 
     /** 重试时说清上一次错在哪，否则它多半会原样再给一遍。 */
-    private fun retryHint(last: Output?): String {
+    private fun retryHint(last: Output?, failure: Exception?): String {
+        if (failure != null) {
+            return "\n\n上一次没能解析出结果（${failure.message?.take(80)}）。" +
+                "这一次只输出那一个 JSON 对象，前后不要有任何解释或思考过程。"
+        }
         if (last == null) return ""
         val problems = buildList {
             if (last.unmatched) {
@@ -123,5 +136,14 @@ class Analyzer(
         }
         if (problems.isEmpty()) return ""
         return "\n\n上一次的输出有问题，重写：\n" + problems.joinToString("\n") { "- $it" }
+    }
+
+    companion object {
+        /**
+         * 分析的输出很短（一个四字段 JSON），但推理型模型会先烧掉一大截 token 想事情，
+         * 1024 常常不够——JSON 还没开头就被截断，报出来是一句「响应中没有 JSON」。
+         * 给足余量，成本上的差别可以忽略。
+         */
+        const val MAX_TOKENS = 3072
     }
 }
