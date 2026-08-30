@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
 private val Context.dataStore by preferencesDataStore("ecs_settings")
@@ -29,6 +31,7 @@ class Settings(private val context: Context) {
     private val LAST_BACKUP_AT = intPreferencesKey("last_backup_count")
     private val LEVEL = intPreferencesKey("review_level")
     private val KEY_LOCKED = stringPreferencesKey("key_locked")
+    private val MODEL_CACHE = stringPreferencesKey("models_cache")
 
     /** 预置项与存下来的合并：升级新增预置项时老用户也能看到。 */
     val endpoints: Flow<List<ApiEndpoint>> = context.dataStore.data.map { prefs ->
@@ -54,6 +57,27 @@ class Settings(private val context: Context) {
 
     /** Key 锁定：防止在录入页误触改坏已经能用的配置。 */
     val keyLocked: Flow<Boolean> = context.dataStore.data.map { it[KEY_LOCKED] == "1" }
+
+    /**
+     * 每个端点上一次拉到的模型 ID。只存 ID：能不能看图、叫什么名字都能算出来，
+     * 存进去反而会跟着代码里的判断逻辑一起过期。
+     *
+     * 存它是为了离线也有候选可选——拉一次之后，飞机上打开设置页照样能换模型。
+     */
+    val modelCache: Flow<Map<String, List<String>>> = context.dataStore.data.map { prefs ->
+        decodeCache(prefs[MODEL_CACHE])
+    }
+
+    suspend fun saveModelCache(endpointId: String, ids: List<String>) {
+        context.dataStore.edit { prefs ->
+            val next = decodeCache(prefs[MODEL_CACHE]) + (endpointId to ids)
+            prefs[MODEL_CACHE] = json.encodeToString(CACHE_SERIALIZER, next)
+        }
+    }
+
+    private fun decodeCache(raw: String?): Map<String, List<String>> =
+        if (raw.isNullOrBlank()) emptyMap()
+        else runCatching { json.decodeFromString(CACHE_SERIALIZER, raw) }.getOrDefault(emptyMap())
 
     private fun decode(raw: String?): List<ApiEndpoint> =
         if (raw.isNullOrBlank()) emptyList()
@@ -106,4 +130,8 @@ class Settings(private val context: Context) {
 
     suspend fun lastBackupCount(): Int = context.dataStore.data.map { it[LAST_BACKUP_AT] ?: 0 }.first()
     suspend fun setLastBackupCount(v: Int) { context.dataStore.edit { it[LAST_BACKUP_AT] = v } }
+
+    private companion object {
+        val CACHE_SERIALIZER = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
+    }
 }

@@ -73,7 +73,8 @@ fun normalizeUrl(baseUrl: String, protocol: Protocol): String {
 
 private val VERSION_SEGMENT = Regex("^v\\d+$", RegexOption.IGNORE_CASE)
 
-private fun hasVersionSegment(url: String): Boolean =
+/** `/v1`、`/api/paas/v4` 这类结尾。模型清单地址（ModelDiscovery）也照这个判。 */
+internal fun hasVersionSegment(url: String): Boolean =
     VERSION_SEGMENT.matches(url.substringAfterLast('/'))
 
 /** 当前档位在用的端点，配上它承担的角色。 */

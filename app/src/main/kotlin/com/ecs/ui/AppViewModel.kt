@@ -16,6 +16,7 @@ import com.ecs.core.model.BuiltInEndpoints
 import com.ecs.core.model.Confidence
 import com.ecs.core.model.ErrorRecord
 import com.ecs.core.model.ModelCatalog
+import com.ecs.core.model.ModelDiscovery
 import com.ecs.core.parse.SlotSpec
 import com.ecs.core.prompt.PromptSlot
 import com.ecs.core.tree.Skeleton
@@ -80,6 +81,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _visionEndpoint = MutableStateFlow(ModelCatalog.DEFAULT_VISION_ENDPOINT)
     val visionEndpoint: StateFlow<String> = _visionEndpoint.asStateFlow()
 
+    /** 每个端点的模型清单：没拉过、拉取中、拉到了、拉失败（附退回的静态清单）。 */
+    sealed interface ModelsState {
+        data object Idle : ModelsState
+        data object Loading : ModelsState
+        data class Loaded(val models: List<ModelDiscovery.RemoteModel>, val cached: Boolean) : ModelsState
+        data class Failed(val message: String, val fallback: List<ModelDiscovery.RemoteModel>) : ModelsState
+    }
+
+    private val _models = MutableStateFlow<Map<String, ModelsState>>(emptyMap())
+    val models: StateFlow<Map<String, ModelsState>> = _models.asStateFlow()
+
     private val _keyLocked = MutableStateFlow(false)
     val keyLocked: StateFlow<Boolean> = _keyLocked.asStateFlow()
 
@@ -124,6 +136,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _visionEndpoint.value =
             runCatching { s.visionEndpoint.first() }.getOrDefault(ModelCatalog.DEFAULT_VISION_ENDPOINT)
         _keyLocked.value = runCatching { s.keyLocked.first() }.getOrDefault(false)
+        primeModelCache()
+    }
+
+    /** 上次拉到的清单先摆出来，离线打开设置页也有候选可选；联网重拉会覆盖它。 */
+    private suspend fun primeModelCache() {
+        val cache = runCatching { container.settings.modelCache.first() }.getOrDefault(emptyMap())
+        val primed = cache.filterValues { it.isNotEmpty() }.mapValues { (id, ids) ->
+            ModelsState.Loaded(offlineModelsOf(id, ids), cached = true)
+        }
+        // 本次会话已经真的拉过的不覆盖
+        _models.value = primed + _models.value
     }
 
     fun dismissMessage() {
@@ -163,6 +186,118 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         container.settings.deleteEndpoint(id)
         refreshSettings()
     }
+
+    /**
+     * 选一个厂商、填一个 Key，剩下的自己配好。
+     *
+     * 以前要用户先懂「端点」「协议」「模型 ID」三件事才能开始用；现在填完 Key
+     * 就去问厂商有哪些模型，视觉档与文本档各自动挑一个，识别立刻能跑。
+     * 拉不到清单也不清掉任何已有配置——照旧能用手填的那套。
+     */
+    fun useProvider(endpoint: ApiEndpoint, force: Boolean = false) = run("配置 ${endpoint.name}…") {
+        container.settings.upsertEndpoint(endpoint)
+        refreshSettings()
+
+        val saved = endpointOf(endpoint.id) ?: endpoint
+        val list = loadModels(saved)
+        if (list.isEmpty()) {
+            _message.value = "已保存 ${saved.name} 的 Key，但没拉到模型清单，" +
+                "可以在设置页「高级」里手填模型 ID"
+            _messageBad.value = true
+            return@run
+        }
+
+        val vision = ModelDiscovery.pick(list, vision = true)
+        val text = ModelDiscovery.pick(list, vision = false)
+
+        if (vision != null && adopts(_visionEndpoint.value, saved.id, force)) {
+            setVisionEndpoint(saved.id)
+            setVisionModel(vision.id)
+        }
+        if (text != null && adopts(_textEndpoint.value, saved.id, force)) {
+            setTextEndpoint(saved.id)
+            setTextModel(text.id)
+        }
+        _message.value = buildString {
+            append("${saved.name} 已就绪：")
+            append("识别用 ${_visionModel.value}　判断用 ${_textModel.value}")
+            // 纯文本厂商（DeepSeek、MiniMax）没有视觉模型，识别档只能留在别处
+            if (vision == null) append("　（这个厂商没有视觉模型，识别没换）")
+        }
+        _messageBad.value = false
+    }
+
+    /**
+     * 要不要把这一档改指到刚配好的厂商。
+     *
+     * 空着或还没填 Key 的档位当然要接管——那正是「填一个 Key 就能用」。但已经配好
+     * 并且在用另一个厂商的档位不能动：有人就是视觉走智谱、判断走 Anthropic，
+     * 在录入页补填一个 Key 不该把这种搭配悄悄拆掉。设置页里点「自动配置」是明确
+     * 要求，那时 force。
+     */
+    private fun adopts(currentId: String, newId: String, force: Boolean): Boolean =
+        force || currentId == newId || endpointOf(currentId)?.configured != true
+
+    /** 手动重拉某个端点的清单。厂商上新之后不用等发版，也不用重装。 */
+    fun fetchModels(endpointId: String) = run("拉取模型清单…") {
+        val ep = endpointOf(endpointId) ?: return@run
+        val list = loadModels(ep)
+        _message.value =
+            if (list.isEmpty()) "${ep.name} 没拉到清单，先看下地址和 Key"
+            else "${ep.name} 有 ${list.size} 个可用模型"
+        _messageBad.value = list.isEmpty()
+    }
+
+    /**
+     * 拉清单并落到状态里。失败不抛：这一步失败只意味着少了个便利，
+     * 静态清单和手填 ID 都还在，不该把上层的动作整个中断掉。
+     */
+    private suspend fun loadModels(endpoint: ApiEndpoint): List<ModelDiscovery.RemoteModel> {
+        _models.value += endpoint.id to ModelsState.Loading
+        return runCatching { container.client.listModels(endpoint) }
+            .onSuccess { list ->
+                _models.value += endpoint.id to ModelsState.Loaded(list, cached = false)
+                container.settings.saveModelCache(endpoint.id, list.map { it.id })
+            }
+            .onFailure { e ->
+                _models.value += endpoint.id to ModelsState.Failed(
+                    message = e.message ?: "拉取失败",
+                    fallback = offlineModels(endpoint.id),
+                )
+            }
+            .getOrDefault(emptyList())
+    }
+
+    /** 拉不到时的候选：上次拉到的（存在本地）优先，没有就用内置清单。 */
+    private suspend fun offlineModels(endpointId: String): List<ModelDiscovery.RemoteModel> {
+        val cached = runCatching { container.settings.modelCache.first()[endpointId] }.getOrNull()
+        return if (!cached.isNullOrEmpty()) offlineModelsOf(endpointId, cached)
+        else builtInModels(endpointId)
+    }
+
+    private fun offlineModelsOf(endpointId: String, ids: List<String>): List<ModelDiscovery.RemoteModel> =
+        ids.map { id ->
+            val known = ModelCatalog.byId(id)
+            ModelDiscovery.RemoteModel(
+                id = id,
+                label = known?.label ?: id,
+                vision = ModelDiscovery.isVision(id),
+                note = known?.note.orEmpty(),
+            )
+        }.ifEmpty { builtInModels(endpointId) }
+
+    private fun builtInModels(endpointId: String): List<ModelDiscovery.RemoteModel> =
+        ModelCatalog.MODELS.filter { it.endpointId == endpointId }.map {
+            ModelDiscovery.RemoteModel(it.id, it.label, it.vision, it.note)
+        }
+
+    /** 端点当前可选的模型：拉到的、缓存的、内置的，按这个优先级。 */
+    fun modelsFor(endpointId: String): List<ModelDiscovery.RemoteModel> =
+        when (val state = _models.value[endpointId]) {
+            is ModelsState.Loaded -> state.models
+            is ModelsState.Failed -> state.fallback
+            else -> builtInModels(endpointId)
+        }
 
     /** 中转站地址、协议、Key 三者错任一个，报错都长得一样，所以给一个能自查的按钮。 */
     fun testEndpoint(endpoint: ApiEndpoint, modelId: String) = run("测试连接…") {
