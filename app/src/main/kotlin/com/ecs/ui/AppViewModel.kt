@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.ecs.Container
 import com.ecs.EcsApp
 import com.ecs.agent.Analyzer
+import com.ecs.agent.Batch
 import com.ecs.agent.PaperScanner
 import com.ecs.core.agg.Aggregator
 import com.ecs.core.direction.Direction
@@ -421,7 +422,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
         if (autoAnalyze) {
             _busy.value = "分析中…"
-            val r = analyzeEach(result.records) { optionsByKey[it.src.no to it.src.slot].orEmpty() }
+            val r = analyzeEach(
+                targets = result.records,
+                onProgress = { i, n -> _busy.value = "分析中　$i/$n" },
+                optionsOf = { optionsByKey[it.src.no to it.src.slot].orEmpty() },
+            )
             _message.value = buildString {
                 append("已录入 ${result.inserted} 条，分析 ${r.done} 条")
                 if (stripped > 0) append("；剥离选择题 $stripped 道")
@@ -455,30 +460,41 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val unmatchedHint = "归不进板块 "
 
+    /**
+     * 每道题一次调用，彼此不共用上下文，所以可以同时发出去。
+     * 串行跑十道题就是十次网络等待相加——这是「分析很慢」的全部来源。
+     */
     private suspend fun analyzeEach(
         targets: List<ErrorRecord>,
         onProgress: ((Int, Int) -> Unit)? = null,
         optionsOf: (ErrorRecord) -> List<String> = { emptyList() },
     ): BatchResult {
+        val runnable = targets.filter { !it.stem.isNullOrBlank() }
+        val results = Batch.map(
+            items = runnable,
+            concurrency = Analyzer.CONCURRENCY,
+            onProgress = { finished, total -> onProgress?.invoke(finished, total) },
+        ) { r ->
+            val out = container.analyzer.analyze(
+                Analyzer.Input(r.stem.orEmpty(), r.given, r.answer, optionsOf(r))
+            )
+            repo.saveAnalysis(container.analyzer.apply(r, out))
+            out
+        }
+
         var done = 0
         var unmatched = 0
         var failed = 0
         var firstError: String? = null
-        targets.forEachIndexed { i, r ->
-            onProgress?.invoke(i + 1, targets.size)
-            val stem = r.stem.orEmpty()
-            if (stem.isBlank()) return@forEachIndexed
-            runCatching {
-                val out = container.analyzer.analyze(
-                    Analyzer.Input(stem, r.given, r.answer, optionsOf(r))
-                )
-                repo.saveAnalysis(container.analyzer.apply(r, out))
-                if (out.unmatched) unmatched++ else done++
-            }.onFailure {
+        results.forEach { result ->
+            result.fold(
+                onSuccess = { if (it.unmatched) unmatched++ else done++ },
                 // 静默吞掉失败会让人以为「没分析」是设计如此，而不是 Key 没填
-                failed++
-                if (firstError == null) firstError = it.message ?: it.toString()
-            }
+                onFailure = {
+                    failed++
+                    if (firstError == null) firstError = it.message ?: it.toString()
+                },
+            )
         }
         return BatchResult(done, unmatched, failed, firstError)
     }

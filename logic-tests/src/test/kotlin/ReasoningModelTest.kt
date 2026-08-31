@@ -18,6 +18,7 @@ private class Replies(private vararg val replies: String) :
     AgentClient({ AgentClient.Config(ApiEndpoint("x", "x", "https://x.com", Protocol.OPENAI), "m") }) {
 
     val systems = mutableListOf<String>()
+    val budgets = mutableListOf<Int>()
 
     override suspend fun complete(
         system: String,
@@ -28,6 +29,7 @@ private class Replies(private vararg val replies: String) :
         role: Role,
     ): String {
         systems += system
+        budgets += maxTokens
         return replies[minOf(systems.size - 1, replies.size - 1)]
     }
 }
@@ -107,5 +109,59 @@ class AnalyzeRetryTest {
 
     @Test fun `the token budget leaves room for models that think first`() {
         assertTrue(Analyzer.MAX_TOKENS >= 3000, "推理档会把 1024 烧光，JSON 还没开头就被截断")
+    }
+}
+
+class TruncatedResponseTest {
+
+    private val client = offline()
+
+    /** 截断的思考里没有 JSON：这正是「响应中没有 JSON + 一大段思考」那条报错的来源。 */
+    private val cutOff = """{"choices":[{"finish_reason":"length","message":{"content":"",""" +
+        """"reasoning_content":"我们分析题干：需要填三个空。第一个空后是 man 名词，前面"}}]}"""
+
+    @Test fun `a thought cut off by the token budget says so instead of leaking into the parser`() {
+        val e = assertFailsWith<AgentClient.AgentException> {
+            client.extractText(cutOff, Protocol.OPENAI)
+        }
+        assertEquals(AgentClient.TRUNCATED, e.message)
+        // 这条报错以前长成「响应中没有 JSON：我们分析题干……」，看不出该改什么
+        assertTrue(!e.message!!.contains("没有 JSON"))
+        assertTrue(e.message!!.contains("截断"))
+    }
+
+    @Test fun `a truncated thought that does carry the json still counts`() {
+        val raw = """{"choices":[{"finish_reason":"length","message":{"content":"",""" +
+            """"reasoning_content":"想了想，答案是 {\"a\":1}"}}]}"""
+        assertTrue(client.extractText(raw, Protocol.OPENAI).contains("{"))
+    }
+
+    @Test fun `a complete thought without json is still handed over as before`() {
+        // 没被截断说明模型是「说完了但没按格式说」，上层重试一次就好，不该报成截断
+        val raw = """{"choices":[{"finish_reason":"stop","message":{"content":"",""" +
+            """"reasoning_content":"这个空填名词。"}}]}"""
+        assertEquals("这个空填名词。", client.extractText(raw, Protocol.OPENAI))
+    }
+
+    @Test fun `anthropic reports the same truncation`() {
+        val e = assertFailsWith<AgentClient.AgentException> {
+            client.extractText("""{"stop_reason":"max_tokens","content":[]}""", Protocol.ANTHROPIC)
+        }
+        assertEquals(AgentClient.TRUNCATED, e.message)
+    }
+}
+
+class RetryBudgetTest {
+
+    private val good = """{"branch":"词法/名词","form":"名词复数","basis":"空前有 the，空后接介词短语","context":""}"""
+
+    @Test fun `the retry asks for a bigger budget than the one that got cut off`() {
+        val client = Replies("思考被掐断了，没有 JSON", good)
+        runBlocking {
+            Analyzer(client, PromptProvider.DEFAULT)
+                .analyze(Analyzer.Input("___ man playing ___ guitar just celebrated his ___ fortieth birthday.", null, null))
+        }
+        assertEquals(listOf(Analyzer.MAX_TOKENS, Analyzer.RETRY_MAX_TOKENS), client.budgets)
+        assertTrue(Analyzer.RETRY_MAX_TOKENS > Analyzer.MAX_TOKENS)
     }
 }
