@@ -35,6 +35,8 @@ object ModelCatalog {
             "glm-4.1v-thinking-flashx", "GLM-4.1V Thinking FlashX", BuiltInEndpoints.ZHIPU,
             vision = true, note = "付费，更快",
         ),
+        // 老牌免费视觉档。新 ID 不是每个账号都开了，留一个一直调得通的兜底
+        ModelSpec("glm-4v-flash", "GLM-4V Flash", BuiltInEndpoints.ZHIPU, vision = true, note = "免费"),
         ModelSpec("glm-4-plus", "GLM-4-Plus", BuiltInEndpoints.ZHIPU, vision = false),
         ModelSpec("kimi-k2-turbo-preview", "Kimi K2 Turbo", BuiltInEndpoints.MOONSHOT, vision = false),
         ModelSpec("moonshot-v1-8k-vision-preview", "Kimi 视觉", BuiltInEndpoints.MOONSHOT, vision = true),

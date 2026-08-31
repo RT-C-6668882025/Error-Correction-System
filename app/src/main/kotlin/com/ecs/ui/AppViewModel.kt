@@ -256,9 +256,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun loadModels(endpoint: ApiEndpoint): List<ModelDiscovery.RemoteModel> {
         _models.value += endpoint.id to ModelsState.Loading
         return runCatching { container.client.listModels(endpoint) }
-            .onSuccess { list ->
-                _models.value += endpoint.id to ModelsState.Loaded(list, cached = false)
-                container.settings.saveModelCache(endpoint.id, list.map { it.id })
+            .onSuccess { fetched ->
+                // 缓存只记厂商真回过的，内置候选每次现补
+                container.settings.saveModelCache(endpoint.id, fetched.map { it.id })
+            }
+            .map { fetched ->
+                // 厂商清单不一定是全集（智谱的 /models 就不回 glm-4v 系列），
+                // 拉到了也要把内置候选补上，否则拉一次清单反而把视觉档整个抹掉
+                val merged = ModelDiscovery.merge(fetched, builtInModels(endpoint.id))
+                _models.value += endpoint.id to ModelsState.Loaded(merged, cached = false)
+                merged
             }
             .onFailure { e ->
                 _models.value += endpoint.id to ModelsState.Failed(
@@ -272,8 +279,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** 拉不到时的候选：上次拉到的（存在本地）优先，没有就用内置清单。 */
     private suspend fun offlineModels(endpointId: String): List<ModelDiscovery.RemoteModel> {
         val cached = runCatching { container.settings.modelCache.first()[endpointId] }.getOrNull()
-        return if (!cached.isNullOrEmpty()) offlineModelsOf(endpointId, cached)
-        else builtInModels(endpointId)
+        if (cached.isNullOrEmpty()) return builtInModels(endpointId)
+        return ModelDiscovery.merge(offlineModelsOf(endpointId, cached), builtInModels(endpointId))
     }
 
     private fun offlineModelsOf(endpointId: String, ids: List<String>): List<ModelDiscovery.RemoteModel> =
