@@ -11,6 +11,7 @@ import com.ecs.agent.Batch
 import com.ecs.agent.PaperScanner
 import com.ecs.core.agg.Aggregator
 import com.ecs.core.direction.Direction
+import com.ecs.core.dup.Duplicates
 import com.ecs.core.export.CsvImporter
 import com.ecs.core.model.ApiEndpoint
 import com.ecs.core.model.BuiltInEndpoints
@@ -517,21 +518,91 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             else "已分析：${saved.branch}　${saved.formShape}"
     }
 
-    /** 批量补分析。 */
-    fun analyzeAll() = run("分析中…") {
-        val pending = records.value.filter { !it.analyzed() && !it.stem.isNullOrBlank() }
-        if (pending.isEmpty()) {
-            _message.value = "没有待分析的题（没有题干的分析不了，先补题干）"
+    /**
+     * 分析选中的那些。
+     *
+     * 原来只有一个「分析全部待分析」，什么都不能挑：想只跑刚录的那几条、
+     * 或者只重跑归错板块的那几条，都只能一条条点开。现在由选择决定跑哪些，
+     * 一条也是它，三十条也是它——批量与单条走同一条路径。
+     */
+    fun analyzeSelected() = run("分析中…") {
+        val targets = selectedRecords()
+        if (targets.isEmpty()) {
+            _message.value = "先选中要分析的题（长按一条进入多选）"
+            _messageBad.value = true
             return@run
         }
-        val r = analyzeEach(pending, onProgress = { i, n -> _busy.value = "分析中　$i/$n" })
+        val runnable = targets.filter { !it.stem.isNullOrBlank() }
+        if (runnable.isEmpty()) {
+            _message.value = "选中的都没有题干，分析不了——先点开补题干"
+            _messageBad.value = true
+            return@run
+        }
+        val r = analyzeEach(runnable, onProgress = { i, n -> _busy.value = "分析中　$i/$n" })
+        _selected.value = emptySet()
         _message.value = buildString {
             append("分析 ${r.done} 条")
-            if (r.unmatched > 0) append("；$unmatchedHint${r.unmatched} 条，去掉「只看待分析」能筛出来重跑")
+            if (targets.size > runnable.size) append("；跳过没题干的 ${targets.size - runnable.size} 条")
+            if (r.unmatched > 0) append("；$unmatchedHint${r.unmatched} 条")
             if (r.failed > 0) append("；失败 ${r.failed} 条：${r.firstError}")
         }
         // 一条都没归进板块，等于复习页还是空的——这是坏消息
         _messageBad.value = r.failed > 0 || r.done == 0
+    }
+
+    // ---------- 原题管理：选中、判重、删除 ----------
+
+    private val _selected = MutableStateFlow<Set<String>>(emptySet())
+
+    /** 选中的 uid。空集合 = 不在多选态，页面照常显示。 */
+    val selected: StateFlow<Set<String>> = _selected.asStateFlow()
+
+    fun toggleSelect(uid: String) {
+        _selected.value = if (uid in _selected.value) _selected.value - uid else _selected.value + uid
+    }
+
+    /** 全选当前筛出来的这些——选择永远只作用在看得见的那批上。 */
+    fun selectAll(uids: List<String>) { _selected.value = _selected.value + uids }
+
+    fun clearSelection() { _selected.value = emptySet() }
+
+    private fun selectedRecords(): List<ErrorRecord> =
+        records.value.filter { it.uid in _selected.value }
+
+    /**
+     * 选中重复题里可以删掉的那些，每一簇留一条。
+     *
+     * 只选中、不直接删：删哪些得让人自己看过再点，这也是为什么留下的那条
+     * 会在页面上标出来。
+     */
+    fun selectDuplicates() {
+        val groups = Duplicates.groups(records.value)
+        if (groups.isEmpty()) {
+            _message.value = "没有找到重复的题（同题干、同空序、同答案才算）"
+            _messageBad.value = false
+            return
+        }
+        val drop = groups.flatMap { g -> g.drop.map { it.uid } }
+        _selected.value = drop.toSet()
+        _message.value = "${groups.size} 组重复，选中了可以删的 ${drop.size} 条" +
+            "；每组留下的那条是已分析优先、其次有答案的、再其次录得早的"
+        _messageBad.value = false
+    }
+
+    /** 重复题里多出来的条数，给页面上的入口显示用。 */
+    fun duplicateCount(): Int = Duplicates.redundant(records.value).size
+
+    /** 删掉选中的。不可撤销，所以调用方必须先确认过。 */
+    fun deleteSelected() = run("删除中…") {
+        val uids = _selected.value.toList()
+        if (uids.isEmpty()) {
+            _message.value = "没有选中任何题"
+            _messageBad.value = true
+            return@run
+        }
+        val n = repo.deleteAll(uids)
+        _selected.value = emptySet()
+        _message.value = "已删除 $n 条（删之前自动存了一份备份，在 设置 → 导出与备份 里）"
     }
 
     // ---------- 功能二：递归式复习 ----------
