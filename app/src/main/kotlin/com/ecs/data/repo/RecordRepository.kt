@@ -91,6 +91,16 @@ class RecordRepository(
 
     suspend fun delete(uid: String) = dao.delete(uid)
 
+    /**
+     * 批量删。删之前先导一份备份——一次点掉几十条是不可撤销的，
+     * 而备份目录里多一份的代价近乎为零。
+     */
+    suspend fun deleteAll(uids: List<String>): Int {
+        if (uids.isEmpty()) return 0
+        backup.export(snapshot(), directionStore.all(), prune = true)
+        return uids.chunked(SQLITE_VARS).sumOf { dao.deleteAll(it) }
+    }
+
     // ---------- 导出与备份 ----------
 
     suspend fun exportNow(): File = backup.export(snapshot(), directionStore.all(), prune = false)
@@ -110,6 +120,10 @@ class RecordRepository(
     }
 
     companion object {
+
+        /** SQLite 一条语句最多 999 个变量，超了会直接抛。 */
+        private const val SQLITE_VARS = 900
+
         fun create(context: Context): RecordRepository {
             val db = AppDatabase.get(context)
             return RecordRepository(

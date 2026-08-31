@@ -153,31 +153,44 @@ open class AgentClient(
             if (endpoint.baseUrl.isBlank()) throw AgentException("${endpoint.name} 未填地址")
             if (endpoint.apiKey.isBlank()) throw AgentException("${endpoint.name} 未配置 API Key")
 
-            val url = ModelDiscovery.modelsUrl(endpoint.baseUrl, endpoint.protocol)
-            val builder = Request.Builder().url(url).get()
-            when (endpoint.protocol) {
-                Protocol.OPENAI -> builder.addHeader("Authorization", "Bearer ${endpoint.apiKey}")
-                Protocol.ANTHROPIC -> {
-                    builder.addHeader("x-api-key", endpoint.apiKey)
-                    builder.addHeader("anthropic-version", ANTHROPIC_VERSION)
-                }
+            val urls = ModelDiscovery.modelsUrls(endpoint.baseUrl, endpoint.protocol)
+            var failure: AgentException? = null
+            urls.forEach { url ->
+                // 一个地址不通就换下一个：厂商把清单挂在哪儿并不统一
+                val result = runCatching { fetchModels(endpoint, url) }
+                result.getOrNull()?.let { return@withContext it }
+                failure = result.exceptionOrNull() as? AgentException
+                    ?: AgentException("拉模型清单失败（$url）")
             }
+            throw failure ?: AgentException("${endpoint.name} 没有可用的模型清单地址")
+        }
 
-            try {
-                http.newCall(builder.build()).execute().use { resp ->
-                    val text = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) {
-                        // 有的中转站压根没实现 /models，这里要说清楚是清单接口不通，不是 Key 不对
-                        throw AgentException("拉模型清单失败 ${resp.code}（$url）：${text.take(200)}")
-                    }
-                    ModelDiscovery.parse(text).ifEmpty {
-                        throw AgentException("$url 返回的清单里没有可用模型")
-                    }
-                }
-            } catch (e: InterruptedIOException) {
-                throw AgentException("拉模型清单超时（$url），检查地址和网络")
+    private fun fetchModels(endpoint: ApiEndpoint, url: String): List<ModelDiscovery.RemoteModel> {
+        val builder = Request.Builder().url(url).get()
+        when (endpoint.protocol) {
+            Protocol.OPENAI -> builder.addHeader("Authorization", "Bearer ${endpoint.apiKey}")
+            Protocol.ANTHROPIC -> {
+                builder.addHeader("x-api-key", endpoint.apiKey)
+                builder.addHeader("anthropic-version", ANTHROPIC_VERSION)
             }
         }
+        return try {
+            http.newCall(builder.build()).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    // 有的厂商压根没开放 /models，这里要说清楚是清单接口不通，不是 Key 不对
+                    throw AgentException(
+                        "拉模型清单失败 ${resp.code}（$url）：${text.take(200)}　$LIST_OPTIONAL"
+                    )
+                }
+                ModelDiscovery.parse(text).ifEmpty {
+                    throw AgentException("$url 返回的清单里没有可用模型　$LIST_OPTIONAL")
+                }
+            }
+        } catch (e: InterruptedIOException) {
+            throw AgentException("拉模型清单超时（$url），检查地址和网络")
+        }
+    }
 
     // ---------- 请求体 ----------
 
@@ -357,6 +370,9 @@ open class AgentClient(
          */
         const val TRUNCATED = "模型把 token 额度用在思考上，正文被截断了。已按更大的额度重试；" +
             "如果总是这样，换一个非推理档的模型（分析这一步不需要长思考，也会快很多）"
+
+        /** 清单拉不到不影响使用——这句要跟着每一条清单报错走，否则看着像 Key 不对。 */
+        const val LIST_OPTIONAL = "（清单不是必须的：下面的候选照样能选，也可以直接手填模型 ID）"
 
         private const val ANTHROPIC_VERSION = "2023-06-01"
         private val JSON_MEDIA = "application/json".toMediaType()

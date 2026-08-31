@@ -47,6 +47,29 @@ object ModelDiscovery {
     }
 
     /**
+     * 依次要试的清单地址。
+     *
+     * 厂商把清单接口挂在哪儿并不统一：多数是版本段下的 /models，也有只认根下
+     * /v1/models 的（中转站尤其乱）。原来只试一个地址，一个 404 就报「拉不到」，
+     * 而用户看到的只是「视觉模型一直拉不下来」。多试一个几乎不花时间。
+     */
+    fun modelsUrls(baseUrl: String, protocol: Protocol): List<String> {
+        val primary = modelsUrl(baseUrl, protocol)
+        if (primary.isEmpty()) return emptyList()
+        val root = rootOf(primary)
+        val fallback = if (root.isEmpty()) "" else "$root/v1/models"
+        return listOfNotNull(primary, fallback.takeIf { it.isNotEmpty() && it != primary })
+    }
+
+    /** scheme://host[:port]，取不出来就返回空串。 */
+    private fun rootOf(url: String): String {
+        val mark = url.indexOf("://")
+        if (mark < 0) return ""
+        val afterScheme = url.indexOf('/', mark + 3)
+        return if (afterScheme < 0) url else url.substring(0, afterScheme)
+    }
+
+    /**
      * OpenAI 与 Anthropic 的清单响应都是 `{"data":[{"id":…}]}`；中转站偶尔写成
      * `{"models":[…]}` 或裸数组，一并吃掉。解析不出就返回空，交给上层退回静态清单。
      */

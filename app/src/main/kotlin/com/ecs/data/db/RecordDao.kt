@@ -30,4 +30,8 @@ interface RecordDao {
 
     @Query("DELETE FROM records WHERE uid = :uid")
     suspend fun delete(uid: String)
+
+    /** 批量删。SQLite 的变量上限是 999，分批由调用方控制。 */
+    @Query("DELETE FROM records WHERE uid IN (:uids)")
+    suspend fun deleteAll(uids: List<String>): Int
 }

@@ -1,5 +1,7 @@
 package com.ecs.ui.screen
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +14,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -27,38 +31,54 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.ecs.core.dup.Duplicates
 import com.ecs.core.model.ErrorRecord
 import com.ecs.ui.AppViewModel
 import com.ecs.ui.component.Badge
 import com.ecs.ui.component.BusyBar
 import com.ecs.ui.component.MessageBar
-import com.ecs.ui.component.SectionCard
 
 /**
  * 原题：一切数据的来源。
  *
  * 题干和答案都能改——识别错了要能改回来，改完可以重跑分析。
  * 复习页看到的每一条形态，最终都追溯到这里的某一道题。
+ *
+ * 这一页同时是原题的管理页：长按进多选，选中的可以一起分析、也可以一起删。
+ * 分析由选择决定跑哪些，不再是「全部待分析」一把梭——重录一份卷子之后
+ * 只想跑新的那几条，是常态。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SourceScreen(vm: AppViewModel, onEditPrompt: () -> Unit = {}) {
     val records by vm.records.collectAsState()
     val busy by vm.busy.collectAsState()
+    val selected by vm.selected.collectAsState()
     var onlyPending by remember { mutableStateOf(false) }
     var onlyUnclassified by remember { mutableStateOf(false) }
+    var onlyDuplicates by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<ErrorRecord?>(null) }
+    var confirmDelete by remember { mutableStateOf(false) }
 
     val pending = vm.pending()
     val unclassified = vm.unclassified()
+
+    // 判重是纯计算，但没必要每次重组都算一遍——记录没变就不重算
+    val dupGroups = remember(records) { Duplicates.groups(records) }
+    val dupKeep = remember(dupGroups) { dupGroups.map { it.keep.uid }.toSet() }
+    val dupDrop = remember(dupGroups) { dupGroups.flatMap { g -> g.drop.map { it.uid } }.toSet() }
+
     val filtered = records.filter { r ->
         (!onlyPending || r.formShape.isNullOrBlank()) &&
             (!onlyUnclassified || (!r.formShape.isNullOrBlank() && !r.analyzed())) &&
+            (!onlyDuplicates || r.uid in dupKeep || r.uid in dupDrop) &&
             (query.isBlank() ||
                 r.stem.orEmpty().contains(query, ignoreCase = true) ||
                 r.answer.orEmpty().contains(query, ignoreCase = true) ||
                 r.branch.orEmpty().contains(query))
     }
+    val picking = selected.isNotEmpty()
 
     Column(Modifier.fillMaxSize()) {
         BusyBar(busy)
@@ -75,8 +95,8 @@ fun SourceScreen(vm: AppViewModel, onEditPrompt: () -> Unit = {}) {
                 modifier = Modifier.weight(1f),
             )
         }
-        // 两个数分开摆：待分析是「还没跑」，未归类是「跑了但没落进板块」，
-        // 后者才是复习页空着的原因，混成一个数字就查不出来了
+        // 三个数分开摆：待分析是「还没跑」，未归类是「跑了但没落进板块」，
+        // 重复是「同一道题录了两遍」——混成一个数字就查不出来了
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -85,41 +105,100 @@ fun SourceScreen(vm: AppViewModel, onEditPrompt: () -> Unit = {}) {
             Text("${filtered.size} 道", style = MaterialTheme.typography.labelMedium)
             FilterChip(
                 selected = onlyPending,
-                onClick = { onlyPending = !onlyPending; if (onlyPending) onlyUnclassified = false },
+                onClick = {
+                    onlyPending = !onlyPending
+                    if (onlyPending) { onlyUnclassified = false; onlyDuplicates = false }
+                },
                 label = { Text("待分析 $pending") },
             )
             if (unclassified > 0) {
                 FilterChip(
                     selected = onlyUnclassified,
-                    onClick = { onlyUnclassified = !onlyUnclassified; if (onlyUnclassified) onlyPending = false },
+                    onClick = {
+                        onlyUnclassified = !onlyUnclassified
+                        if (onlyUnclassified) { onlyPending = false; onlyDuplicates = false }
+                    },
                     label = { Text("未归类 $unclassified") },
                 )
             }
+            if (dupDrop.isNotEmpty()) {
+                FilterChip(
+                    selected = onlyDuplicates,
+                    onClick = {
+                        onlyDuplicates = !onlyDuplicates
+                        if (onlyDuplicates) { onlyPending = false; onlyUnclassified = false }
+                    },
+                    label = { Text("重复 ${dupDrop.size}") },
+                )
+            }
         }
-        if (pending + unclassified > 0) {
+
+        if (picking) {
+            // 选中之后所有动作都在这一行里：分析、删除、全选、取消
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // 没归进板块就进不了复习页：那一支是空的，小方向也就无从汇总
-                OutlinedButton(onClick = { vm.analyzeAll() }) {
-                    Text("分析这 ${pending + unclassified} 条")
+                Text("选中 ${selected.size}", style = MaterialTheme.typography.labelMedium)
+                OutlinedButton(onClick = { vm.analyzeSelected() }) { Text("分析") }
+                OutlinedButton(onClick = { confirmDelete = true }) { Text("删除") }
+                TextButton(onClick = { vm.selectAll(filtered.map { it.uid }) }) { Text("全选") }
+                TextButton(onClick = { vm.clearSelection() }) { Text("取消") }
+            }
+        } else {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "长按一条进入多选",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+                if (pending + unclassified > 0) {
+                    // 没归进板块就进不了复习页：那一支是空的，小方向也就无从汇总
+                    TextButton(onClick = {
+                        vm.selectAll(
+                            records.filter { !it.analyzed() && !it.stem.isNullOrBlank() }.map { it.uid }
+                        )
+                    }) { Text("选中待分析 ${pending + unclassified}") }
+                }
+                if (dupDrop.isNotEmpty()) {
+                    TextButton(onClick = { vm.selectDuplicates() }) { Text("选中重复 ${dupDrop.size}") }
                 }
                 TextButton(onClick = onEditPrompt) { Text("改分析提示词") }
             }
         }
+
         LazyColumn(Modifier.weight(1f)) {
             items(filtered, key = { it.uid }) { r ->
+                val checked = r.uid in selected
                 Card(
-                    onClick = { editing = r },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    colors = if (checked) {
+                        CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        )
+                    } else CardDefaults.cardColors(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                        .combinedClickable(
+                            // 多选态里点一下就是选，不再打开编辑框——
+                            // 勾了三十条之后误触打开一个对话框会很烦
+                            onClick = { if (picking) vm.toggleSelect(r.uid) else editing = r },
+                            onLongClick = { vm.toggleSelect(r.uid) },
+                        ),
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            if (picking) {
+                                Checkbox(checked = checked, onCheckedChange = { vm.toggleSelect(r.uid) })
+                            }
                             Text(r.src.paper, style = MaterialTheme.typography.labelSmall)
                             Badge("第${r.src.no}题", MaterialTheme.colorScheme.secondary)
                             when {
@@ -128,6 +207,11 @@ fun SourceScreen(vm: AppViewModel, onEditPrompt: () -> Unit = {}) {
                                 // 跑过了但 branch 落在十九支之外：复习页看不到它
                                 !r.analyzed() ->
                                     Badge("未归类", MaterialTheme.colorScheme.error)
+                            }
+                            when (r.uid) {
+                                // 留哪条、删哪条要在卡片上看得见，否则「选中重复」等于闭眼删
+                                in dupKeep -> Badge("重复·留这条", MaterialTheme.colorScheme.primary)
+                                in dupDrop -> Badge("重复", MaterialTheme.colorScheme.error)
                             }
                         }
                         Text(
@@ -154,6 +238,24 @@ fun SourceScreen(vm: AppViewModel, onEditPrompt: () -> Unit = {}) {
         MessageBar(vm)
     }
 
+    if (confirmDelete) {
+        val count = selected.size
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除 $count 条原题？") },
+            text = {
+                Text(
+                    "原题是一切的来源，删掉之后它的分析、以及它在小方向里贡献的那一份都不再有依据。\n\n" +
+                        "删之前会自动存一份备份（设置 → 导出与备份 里能找到并导回来），但这一步本身不可撤销。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.deleteSelected(); confirmDelete = false }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
+        )
+    }
+
     editing?.let { record ->
         SourceDialog(
             record = record,
@@ -176,6 +278,7 @@ private fun SourceDialog(
     var stem by remember { mutableStateOf(record.stem.orEmpty()) }
     var answer by remember { mutableStateOf(record.answer.orEmpty()) }
     var basis by remember { mutableStateOf(record.basis.orEmpty()) }
+    var confirmDelete by remember { mutableStateOf(false) }
 
     fun edited() = record.copy(
         stem = stem.ifBlank { null },
@@ -221,12 +324,23 @@ private fun SourceDialog(
                     enabled = stem.isNotBlank(),
                     modifier = Modifier.padding(top = 8.dp),
                 ) { Text(if (record.branch == null) "分析" else "重新分析") }
+                if (confirmDelete) {
+                    Text(
+                        "再点一次「删除」就删掉这一条，不可撤销。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
             }
         },
         confirmButton = { TextButton(onClick = { onSave(edited()) }) { Text("保存") } },
         dismissButton = {
             Row {
-                TextButton(onClick = onDelete) { Text("删除") }
+                // 删除要点两次：这个按钮紧挨着「关闭」，误触的代价是一条原题
+                TextButton(onClick = { if (confirmDelete) onDelete() else confirmDelete = true }) {
+                    Text(if (confirmDelete) "确认删除" else "删除")
+                }
                 TextButton(onClick = onDismiss) { Text("关闭") }
             }
         },
