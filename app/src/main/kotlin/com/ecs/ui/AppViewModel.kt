@@ -225,7 +225,43 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             append("识别用 ${_visionModel.value}　判断用 ${_textModel.value}")
             // 纯文本厂商（DeepSeek、MiniMax）没有视觉模型，识别档只能留在别处
             if (vision == null) append("　（这个厂商没有视觉模型，识别没换）")
+            if (!force) append("　已经配好的那一档没动，想改用下面的「只设识别档 / 只设判断档」")
         }
+        _messageBad.value = false
+    }
+
+    /**
+     * 只把某一档指到这个厂商，另一档一个字都不动。
+     *
+     * 「视觉走智谱、判断走 Anthropic」是完全正当的搭配——识别天天跑要便宜，
+     * 判断决定分析质量要强，本来就很难是同一家。所以两档必须能分开配。
+     */
+    fun useProviderFor(endpoint: ApiEndpoint, vision: Boolean) = run("配置 ${endpoint.name}…") {
+        container.settings.upsertEndpoint(endpoint)
+        refreshSettings()
+
+        val saved = endpointOf(endpoint.id) ?: endpoint
+        val list = loadModels(saved)
+        val slot = if (vision) "识别" else "判断"
+        val picked = ModelDiscovery.pick(list, vision = vision)
+        if (picked == null) {
+            _message.value = if (vision) {
+                "${saved.name} 这边没找到能看图的模型，识别档没动。" +
+                    "可以在「高级 → 视觉模型」里直接手填模型 ID"
+            } else {
+                "${saved.name} 没拉到可用模型，判断档没动"
+            }
+            _messageBad.value = true
+            return@run
+        }
+        if (vision) {
+            setVisionEndpoint(saved.id)
+            setVisionModel(picked.id)
+        } else {
+            setTextEndpoint(saved.id)
+            setTextModel(picked.id)
+        }
+        _message.value = "$slot 档已改为 ${saved.name}　${picked.id}（另一档没动）"
         _messageBad.value = false
     }
 

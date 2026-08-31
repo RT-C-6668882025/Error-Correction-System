@@ -354,7 +354,9 @@ private fun ProviderCard(vm: AppViewModel) {
     SectionCard("厂商与模型") {
         Text(
             "选一个厂商，填一个 API Key，其余自动完成：会去问厂商这个 Key 能用哪些模型，" +
-                "再给识别（视觉）与判断（文本）两档各挑一个，挑完就能开始录入。",
+                "再给识别（视觉）与判断（文本）两档各挑一个，挑完就能开始录入。\n" +
+                "两档可以是不同厂商——识别天天跑挑便宜的，判断决定分析质量挑强的。" +
+                "存 Key 只会补上还空着的那一档，已经配好的不动。",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(top = 6.dp),
         )
@@ -380,19 +382,31 @@ private fun ProviderCard(vm: AppViewModel) {
             )
         }
 
-        // 保存 Key 就顺手把两档配好，用户不需要再点第二下
+        // 存 Key 只填空着的那一档。原来这里是 force=true，于是给第二个厂商填一次 Key，
+        // 「识别走智谱、判断走 Anthropic」这种搭配就被悄悄拆成两档同一家了
         ApiKeyField(
             endpoint = endpoint,
-            onSave = { saved -> vm.useProvider(saved, force = true) },
+            onSave = { saved -> vm.useProvider(saved, force = false) },
             locked = locked,
             onLockChange = vm::setKeyLocked,
         )
 
-        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(
+                onClick = { vm.useProviderFor(endpoint, vision = true) },
+                enabled = endpoint.configured,
+            ) { Text("只设识别档") }
+            OutlinedButton(
+                onClick = { vm.useProviderFor(endpoint, vision = false) },
+                enabled = endpoint.configured,
+            ) { Text("只设判断档") }
             OutlinedButton(
                 onClick = { vm.useProvider(endpoint, force = true) },
                 enabled = endpoint.configured,
-            ) { Text("自动配置") }
+            ) { Text("两档都用它") }
             OutlinedButton(
                 onClick = { vm.fetchModels(endpoint.id) },
                 enabled = endpoint.configured,
@@ -415,7 +429,9 @@ private fun ProviderCard(vm: AppViewModel) {
         )
         if (state is AppViewModel.ModelsState.Failed) {
             Text(
-                "清单拉不到不影响使用：下面是内置与上次拉到的候选，也可以在「高级」里手填 ID。",
+                "清单拉不到不影响使用：下面是内置与上次拉到的候选，也可以在「高级」里手填 ID。\n" +
+                    "不是每个厂商都开放了 /models 清单接口，报 404 就是这种情况——" +
+                    "跟 Key 对不对、模型能不能调没有关系，直接点下面的候选即可。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.secondary,
             )
@@ -426,7 +442,8 @@ private fun ProviderCard(vm: AppViewModel) {
             title = "识别（视觉）",
             models = available.filter { it.vision },
             selected = if (visionEndpoint == endpoint.id) visionModel else "",
-            empty = "这个厂商没有能看图的模型，识别要选别的厂商",
+            empty = "这个厂商的候选里没有能看图的模型——换个厂商，" +
+                "或者在「高级 → 视觉模型」里直接手填模型 ID（智谱的是 glm-4.6v-flash / glm-4v-flash）",
             onPick = { id ->
                 vm.setVisionEndpoint(endpoint.id)
                 vm.setVisionModel(id)

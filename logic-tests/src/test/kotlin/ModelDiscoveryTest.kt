@@ -222,3 +222,42 @@ class ModelMergeTest {
             .forEach { assertTrue(ModelDiscovery.isVision(it), it) }
     }
 }
+
+/** 清单地址试两个：厂商把它挂在哪儿并不统一，一个 404 不该等于「拉不到」。 */
+class ModelsUrlFallbackTest {
+
+    @Test fun `a versioned base also tries the host root`() {
+        val urls = ModelDiscovery.modelsUrls("https://open.bigmodel.cn/api/paas/v4", Protocol.OPENAI)
+        assertEquals(
+            listOf(
+                "https://open.bigmodel.cn/api/paas/v4/models",
+                "https://open.bigmodel.cn/v1/models",
+            ),
+            urls,
+        )
+    }
+
+    @Test fun `no pointless duplicate when the two are the same`() {
+        assertEquals(
+            listOf("https://api.deepseek.com/v1/models"),
+            ModelDiscovery.modelsUrls("https://api.deepseek.com/v1", Protocol.OPENAI),
+        )
+    }
+
+    @Test fun `a port survives the fallback`() {
+        assertEquals(
+            listOf("http://192.168.1.100:11434/v1/models"),
+            ModelDiscovery.modelsUrls("http://192.168.1.100:11434/v1", Protocol.OPENAI),
+        )
+    }
+
+    @Test fun `an empty base has nothing to try`() {
+        assertTrue(ModelDiscovery.modelsUrls("   ", Protocol.OPENAI).isEmpty())
+    }
+
+    @Test fun `every built-in endpoint has at least one listing url`() {
+        BuiltInEndpoints.ALL.forEach {
+            assertTrue(ModelDiscovery.modelsUrls(it.baseUrl, it.protocol).isNotEmpty(), it.name)
+        }
+    }
+}
