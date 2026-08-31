@@ -5,6 +5,7 @@ import com.ecs.core.model.Protocol
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -174,5 +175,50 @@ class ModelPickTest {
     @Test fun `text slot may use a vision model when that is all there is`() {
         val picked = ModelDiscovery.pick(models("glm-4.6v-flash"), vision = false)
         assertEquals("glm-4.6v-flash", picked?.id)
+    }
+}
+
+/**
+ * 拉到清单之后，内置候选还在不在。
+ *
+ * 智谱的 /models 只回文本档，视觉档（glm-4v 系列）不在里面。原来「拉到了就整份换掉」，
+ * 于是拉一次清单之后识别那一行直接写「这个厂商没有能看图的模型」。
+ */
+class ModelMergeTest {
+
+    private fun remote(vararg ids: String) =
+        ids.map { ModelDiscovery.RemoteModel(it, it, ModelDiscovery.isVision(it)) }
+
+    private val zhipuBuiltIn = ModelCatalog.MODELS
+        .filter { it.endpointId == BuiltInEndpoints.ZHIPU }
+        .map { ModelDiscovery.RemoteModel(it.id, it.label, it.vision, it.note) }
+
+    @Test fun `a text only listing keeps the built-in vision models`() {
+        val merged = ModelDiscovery.merge(remote("glm-4-plus", "glm-4-air", "glm-4-flash"), zhipuBuiltIn)
+        assertTrue(merged.any { it.vision }, "拉完清单反而没有视觉模型可选了")
+        assertTrue(merged.map { it.id }.contains(ModelCatalog.DEFAULT_VISION))
+        assertNotNull(ModelDiscovery.pick(merged, vision = true))
+    }
+
+    @Test fun `what the vendor returned comes first and is not duplicated`() {
+        val merged = ModelDiscovery.merge(remote("glm-4-plus", ModelCatalog.DEFAULT_VISION), zhipuBuiltIn)
+        assertEquals("glm-4-plus", merged.first().id)
+        assertEquals(merged.size, merged.map { it.id }.distinct().size)
+        // 厂商回过的那条保持原样，不该被标成内置候选
+        assertEquals("", merged.first { it.id == ModelCatalog.DEFAULT_VISION }.note)
+    }
+
+    @Test fun `models the vendor never listed say so`() {
+        val merged = ModelDiscovery.merge(remote("glm-4-air"), zhipuBuiltIn)
+        assertEquals(ModelDiscovery.SUGGESTED_NOTE, merged.first { it.id == "glm-4-plus" }.note)
+    }
+
+    @Test fun `an empty listing falls back to the built-ins untouched`() {
+        assertEquals(zhipuBuiltIn, ModelDiscovery.merge(emptyList(), zhipuBuiltIn))
+    }
+
+    @Test fun `zhipu vision ids are recognised by name`() {
+        listOf("glm-4v", "glm-4v-flash", "glm-4v-plus-0111", "glm-4.5v", "glm-4.6v-flash", "glm-4.1v-thinking-flash")
+            .forEach { assertTrue(ModelDiscovery.isVision(it), it) }
     }
 }

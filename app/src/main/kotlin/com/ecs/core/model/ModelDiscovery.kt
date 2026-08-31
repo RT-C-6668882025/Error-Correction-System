@@ -80,6 +80,24 @@ object ModelDiscovery {
         }.distinctBy { it.id }
     }
 
+    /**
+     * 拉到的清单与内置候选合并，拉到的在前。
+     *
+     * 厂商的 /models 不一定是全集：智谱把视觉档（glm-4v 系列）留在文档里、
+     * 清单接口只回文本档，中转站更是想回什么回什么。原来「拉到了就整份换掉」，
+     * 于是拉一次清单反而把本来能用的视觉模型从候选里抹掉了——页面上写着
+     * 「这个厂商没有能看图的模型」，可 glm-4.6v-flash 明明调得通。
+     *
+     * 所以内置的那几个永远补在后面：清单里已有的不重复，没有的标出来是内置候选，
+     * 用户知道它没在厂商清单里出现过，但照样可以点。
+     */
+    fun merge(fetched: List<RemoteModel>, builtIn: List<RemoteModel>): List<RemoteModel> {
+        if (fetched.isEmpty()) return builtIn
+        val seen = fetched.map { it.id }.toSet()
+        return fetched + builtIn.filterNot { it.id in seen }
+            .map { it.copy(note = it.note.ifBlank { SUGGESTED_NOTE }) }
+    }
+
     /** 清单里认识的以清单为准，不认识的看 ID：厂商命名里视觉标记相当稳定。 */
     fun isVision(id: String): Boolean {
         ModelCatalog.byId(id)?.let { return it.vision }
@@ -135,8 +153,11 @@ object ModelDiscovery {
     /** 比清单里任何一项都靠后。 */
     private const val PREFERRED_CEILING = 1000
 
-    /** glm-4v、glm-4.6v、qwen2-vl 这类：数字后面一个 v，或独立的 vl 段。 */
-    private val VISION_TOKEN = Regex("""\d(\.\d+)?v($|[-_.])|(^|[-_.])vl($|[-_.])""")
+    /** 内置补进来的候选：厂商清单里没有它，但它调得通。 */
+    const val SUGGESTED_NOTE = "内置候选"
+
+    /** glm-4v、glm-4.6v、qwen2-vl、cogvlm 这类：数字后面一个 v，或独立的 v / vl / vlm 段。 */
+    private val VISION_TOKEN = Regex("""\d(\.\d+)?v($|[-_.])|(^|[-_.])vl(m)?($|[-_.])|(^|[-_.])v($|[-_.])""")
 
     private val VISION_HINTS = listOf("vision", "omni", "multimodal", "ocr", "claude-")
 

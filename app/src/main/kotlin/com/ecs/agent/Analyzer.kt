@@ -62,7 +62,8 @@ class Analyzer(
                 val raw = client.complete(
                     system = systemPrompt(input.options.isNotEmpty()) + retryHint(last, failure),
                     user = user,
-                    maxTokens = MAX_TOKENS,
+                    // 上一次是被额度掐断的，就不能拿同样的额度再要一遍——只会同样断在思考里
+                    maxTokens = if (attempt == 0) MAX_TOKENS else RETRY_MAX_TOKENS,
                     temperature = if (attempt == 0) 0.0 else 0.3,
                 )
                 parse(raw)
@@ -145,5 +146,14 @@ class Analyzer(
          * 给足余量，成本上的差别可以忽略。
          */
         const val MAX_TOKENS = 3072
+
+        /**
+         * 重试时的额度。第一次断在思考里，说明这道题（多空、长句）它想得比一般题久，
+         * 同样的额度再来一次多半还是断在同一个地方。
+         */
+        const val RETRY_MAX_TOKENS = 6144
+
+        /** 批量分析的并发度。 */
+        const val CONCURRENCY = Batch.DEFAULT_CONCURRENCY
     }
 }
