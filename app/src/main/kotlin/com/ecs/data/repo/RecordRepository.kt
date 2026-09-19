@@ -78,18 +78,50 @@ class RecordRepository(
         val fresh = records.filter { it.uid !in existing }
             .map { it.copy(status = Validation.deriveStatus(it)) }
         dao.insertAll(fresh.map { it.toEntity() })
+        directionStore.invalidate(fresh.map { it.branch })
         maybeBackup()
         return fresh.size
     }
 
     /** 保存分析产出。状态由字段现状推导，不由调用方指定。 */
     suspend fun saveAnalysis(record: ErrorRecord): ErrorRecord {
+        val before = dao.byUid(record.uid)?.toModel()
         val settled = record.copy(status = Validation.deriveStatus(record))
-        dao.update(settled.toEntity())
-        return settled
+        dao.updateAnalysis(
+            uid = settled.uid,
+            branch = settled.branch,
+            formShape = settled.formShape,
+            basis = settled.basis,
+            formContext = settled.formContext,
+            note = settled.note,
+            status = settled.status.label,
+        )
+        directionStore.invalidate(listOf(before?.branch, settled.branch))
+        return dao.byUid(record.uid)?.toModel() ?: settled
     }
 
-    suspend fun delete(uid: String) = dao.delete(uid)
+    /** Save user-edited source facts. Changing facts invalidates the analysis derived from them. */
+    suspend fun saveRecord(record: ErrorRecord): ErrorRecord {
+        val before = dao.byUid(record.uid)?.toModel() ?: return record
+        val sourceChanged = before.stem != record.stem || before.given != record.given ||
+            before.answer != record.answer
+        val next = if (sourceChanged) record.copy(
+            branch = null,
+            formShape = null,
+            basis = null,
+            formContext = null,
+            status = RecordStatus.PENDING,
+        ) else record.copy(status = Validation.deriveStatus(record))
+        dao.update(next.toEntity())
+        if (sourceChanged) directionStore.invalidate(listOf(before.branch))
+        return next
+    }
+
+    suspend fun delete(uid: String) {
+        val before = dao.byUid(uid)?.toModel()
+        dao.delete(uid)
+        directionStore.invalidate(listOf(before?.branch))
+    }
 
     /**
      * 批量删。删之前先导一份备份——一次点掉几十条是不可撤销的，
@@ -97,8 +129,11 @@ class RecordRepository(
      */
     suspend fun deleteAll(uids: List<String>): Int {
         if (uids.isEmpty()) return 0
+        val before = snapshot().filter { it.uid in uids.toSet() }
         backup.export(snapshot(), directionStore.all(), prune = true)
-        return uids.chunked(SQLITE_VARS).sumOf { dao.deleteAll(it) }
+        val deleted = uids.chunked(SQLITE_VARS).sumOf { dao.deleteAll(it) }
+        directionStore.invalidate(before.map { it.branch })
+        return deleted
     }
 
     // ---------- 导出与备份 ----------

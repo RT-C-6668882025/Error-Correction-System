@@ -4,6 +4,7 @@ import com.ecs.core.model.ErrorRecord
 import com.ecs.core.prompt.PromptSlot
 import com.ecs.core.rules.Validation
 import com.ecs.core.tree.Skeleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
@@ -68,6 +69,9 @@ class Analyzer(
                 )
                 parse(raw)
             } catch (e: Exception) {
+                // Cancellation is control flow, not a bad model response.  Swallowing it here
+                // makes a cancelled batch start a second paid request and delays screen exit.
+                if (e is CancellationException) throw e
                 failure = e
                 return@repeat
             }

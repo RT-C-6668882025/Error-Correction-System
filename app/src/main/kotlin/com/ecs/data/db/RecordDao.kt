@@ -16,6 +16,9 @@ interface RecordDao {
     @Query("SELECT * FROM records ORDER BY created_at DESC")
     suspend fun all(): List<RecordEntity>
 
+    @Query("SELECT * FROM records WHERE uid = :uid LIMIT 1")
+    suspend fun byUid(uid: String): RecordEntity?
+
     @Query("SELECT uid FROM records")
     suspend fun allUids(): List<String>
 
@@ -27,6 +30,22 @@ interface RecordDao {
 
     @Update
     suspend fun update(row: RecordEntity)
+
+    /** Analysis writes must not overwrite source fields from an older in-flight snapshot. */
+    @Query("""
+        UPDATE records SET branch = :branch, form_shape = :formShape, basis = :basis,
+            form_context = :formContext, note = :note, status = :status
+        WHERE uid = :uid
+    """)
+    suspend fun updateAnalysis(
+        uid: String,
+        branch: String?,
+        formShape: String?,
+        basis: String?,
+        formContext: String?,
+        note: String?,
+        status: String,
+    ): Int
 
     @Query("DELETE FROM records WHERE uid = :uid")
     suspend fun delete(uid: String)

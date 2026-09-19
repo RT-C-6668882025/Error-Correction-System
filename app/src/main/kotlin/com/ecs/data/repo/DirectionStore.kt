@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.ListSerializer
 import java.io.File
 
@@ -25,6 +27,7 @@ class DirectionStore(private val context: Context) {
     }
     private val file: File get() = File(context.filesDir, "directions.json")
     private val serializer = ListSerializer(Direction.serializer())
+    private val writeLock = Mutex()
 
     private val _directions = MutableStateFlow<List<Direction>>(emptyList())
     val directions: StateFlow<List<Direction>> = _directions.asStateFlow()
@@ -45,12 +48,26 @@ class DirectionStore(private val context: Context) {
     fun major(): Direction? = of(Direction.ALL)
 
     suspend fun save(direction: Direction) = withContext(Dispatchers.IO) {
-        val next = _directions.value.filterNot { it.scope == direction.scope } + direction
-        write(next)
+        writeLock.withLock {
+            val next = _directions.value.filterNot { it.scope == direction.scope } + direction
+            write(next)
+        }
     }
 
     suspend fun delete(scope: String) = withContext(Dispatchers.IO) {
-        write(_directions.value.filterNot { it.scope == scope })
+        writeLock.withLock { write(_directions.value.filterNot { it.scope == scope }) }
+    }
+
+    /**
+     * A minor is a materialized view of analyses; the major is a materialized view of minors.
+     * Once an input branch changes, keeping either result would present stale output as current.
+     */
+    suspend fun invalidate(scopes: Collection<String?>) = withContext(Dispatchers.IO) {
+        val affected = scopes.filterNotNull().toSet()
+        if (affected.isEmpty()) return@withContext
+        writeLock.withLock {
+            write(_directions.value.filterNot { it.scope == Direction.ALL || it.scope in affected })
+        }
     }
 
     private fun write(list: List<Direction>) {

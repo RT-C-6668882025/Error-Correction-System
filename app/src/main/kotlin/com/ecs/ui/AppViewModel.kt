@@ -545,10 +545,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 单条重跑：题干改对了之后用。 */
     fun analyze(record: ErrorRecord) = run("分析中…") {
-        val stem = record.stem?.takeIf { it.isNotBlank() }
+        // The dialog may contain source edits not saved yet. Persist them first; otherwise an
+        // in-flight analysis can write an old source snapshot back over the user's correction.
+        val source = repo.saveRecord(record)
+        val stem = source.stem?.takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("这条没有题干，先补上再分析")
-        val out = container.analyzer.analyze(Analyzer.Input(stem, record.given, record.answer))
-        val saved = repo.saveAnalysis(container.analyzer.apply(record, out))
+        val out = container.analyzer.analyze(Analyzer.Input(stem, source.given, source.answer))
+        val saved = repo.saveAnalysis(container.analyzer.apply(source, out))
         _message.value =
             if (out.unmatched) "归不进十九个板块，留在原题页等你处理：${out.formShape}"
             else "已分析：${saved.branch}　${saved.formShape}"
@@ -702,7 +705,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- 原题 ----------
 
-    fun saveRecord(record: ErrorRecord) = run("保存中…") { repo.saveAnalysis(record) }
+    fun saveRecord(record: ErrorRecord) = run("保存中…") { repo.saveRecord(record) }
 
     fun delete(uid: String) = run("删除中…") { repo.delete(uid) }
 

@@ -4,6 +4,7 @@ import com.ecs.agent.PromptProvider
 import com.ecs.core.model.ApiEndpoint
 import com.ecs.core.model.Protocol
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -109,6 +110,29 @@ class AnalyzeRetryTest {
 
     @Test fun `the token budget leaves room for models that think first`() {
         assertTrue(Analyzer.MAX_TOKENS >= 3000, "推理档会把 1024 烧光，JSON 还没开头就被截断")
+    }
+
+    @Test fun `cancellation is not mistaken for a parse failure and retried`() {
+        val client = object : AgentClient({
+            AgentClient.Config(ApiEndpoint("x", "x", "https://x.com", Protocol.OPENAI), "m")
+        }) {
+            var calls = 0
+            override suspend fun complete(
+                system: String,
+                user: String,
+                images: List<Image>,
+                maxTokens: Int,
+                temperature: Double,
+                role: Role,
+            ): String {
+                calls++
+                throw CancellationException("screen closed")
+            }
+        }
+        assertFailsWith<CancellationException> {
+            runBlocking { Analyzer(client, PromptProvider.DEFAULT).analyze(input) }
+        }
+        assertEquals(1, client.calls, "取消后不应再发第二次付费请求")
     }
 }
 
