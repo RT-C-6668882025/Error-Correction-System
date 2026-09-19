@@ -196,7 +196,7 @@ class AggregatorTest {
         )
         val one = nouns.analyses.first()
         assertEquals("空前有 the，空后接介词短语", one.basis)
-        assertEquals("The ___ of AI has changed everything.", one.stem)
+        assertEquals("The ___ of AI changed everything.", one.stem)
     }
 
     @Test fun `the facts block never leaks question ids or counts of wrongness`() {
