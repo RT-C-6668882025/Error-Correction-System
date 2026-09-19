@@ -48,6 +48,10 @@ jobs:
           java-version: '17'
 
       - uses: android-actions/setup-android@v3
+        with:
+          # setup-android 默认还会安装已经从仓库下架的旧 `tools` 包，
+          # sdkmanager 因此在真正编译前就失败。只声明本项目实际需要的包。
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
 
       - uses: gradle/actions/setup-gradle@v4
 
