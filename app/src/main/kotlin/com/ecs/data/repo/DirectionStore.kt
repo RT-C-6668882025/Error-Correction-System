@@ -2,6 +2,7 @@ package com.ecs.data.repo
 
 import android.content.Context
 import com.ecs.core.direction.Direction
+import com.ecs.core.tree.Skeleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -49,7 +50,12 @@ class DirectionStore(private val context: Context) {
 
     suspend fun save(direction: Direction) = withContext(Dispatchers.IO) {
         writeLock.withLock {
-            val next = _directions.value.filterNot { it.scope == direction.scope } + direction
+            // 大方向是所有小方向的物化视图。任意一棵小方向被重建，旧大方向立刻过期；
+            // 否则页面会同时展示新小方向和基于旧小方向生成的大方向。
+            val next = _directions.value.filterNot {
+                it.scope == direction.scope ||
+                    (direction.scope != Direction.ALL && it.scope == Direction.ALL)
+            } + direction
             write(next)
         }
     }
@@ -63,7 +69,11 @@ class DirectionStore(private val context: Context) {
      * Once an input branch changes, keeping either result would present stale output as current.
      */
     suspend fun invalidate(scopes: Collection<String?>) = withContext(Dispatchers.IO) {
-        val affected = scopes.filterNotNull().toSet()
+        // 老版本可能保存四层路径；Direction 的 scope 始终是骨架里的两层板块路径。
+        // 失效前先归一，不然 `词法/名词/后缀转换/-tion` 匹配不到 `词法/名词`。
+        val affected = scopes.filterNotNull().mapTo(hashSetOf()) {
+            Skeleton.branchOf(it)?.path ?: it
+        }
         if (affected.isEmpty()) return@withContext
         writeLock.withLock {
             write(_directions.value.filterNot { it.scope == Direction.ALL || it.scope in affected })
