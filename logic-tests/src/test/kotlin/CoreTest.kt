@@ -123,10 +123,10 @@ class ValidationTest {
 class AggregatorTest {
 
     private val corpus = listOf(
-        rec("q_001_1", branch = "词法/名词", formShape = "名词，动词加 -tion 后缀"),
-        rec("q_002_1", no = 2, branch = "词法/名词", formShape = "名词复数，词尾加 -s"),
-        rec("q_003_1", no = 3, branch = "语法/时态", formShape = "一般过去时，动词过去式"),
-        rec("q_004_1", no = 4, branch = "句法/句子结构", formShape = "关系代词 which/that"),
+        rec("q_001_1", branch = "词法/名词", formShape = "名词，动词加 -tion 后缀", stem = "The ___ of AI changed everything."),
+        rec("q_002_1", no = 2, branch = "词法/名词", formShape = "名词复数，词尾加 -s", stem = "Many ___ joined us."),
+        rec("q_003_1", no = 3, branch = "语法/时态", formShape = "一般过去时，动词过去式", stem = "He ___ home yesterday."),
+        rec("q_004_1", no = 4, branch = "句法/句子结构", formShape = "关系代词 which/that", stem = "The book ___ I bought is new."),
     )
 
     @Test fun `unanalysed records stay out of the blocks`() {
@@ -166,6 +166,20 @@ class AggregatorTest {
         val blocks = Aggregator.blocks(corpus)
         assertEquals(listOf("词法/名词", "句法/句子结构", "语法/时态"), blocks.map { it.path })
         assertEquals(2, blocks.first().size)
+    }
+
+    @Test fun `duplicate records contribute only one piece of evidence`() {
+        val first = rec("q_030_1")
+        val duplicate = rec(
+            "q_099_1", paper = "同题另一份卷", no = 99,
+            createdAt = first.createdAt + 1,
+            stem = first.stem,
+        )
+        val noun = Aggregator.block(
+            listOf(first, duplicate),
+            Skeleton.branchOf("词法/名词")!!,
+        )
+        assertEquals(1, noun.size, "重复题不能在小方向里冒充两份证据")
     }
 
     @Test fun `every skeleton branch shows up when empties are included`() {

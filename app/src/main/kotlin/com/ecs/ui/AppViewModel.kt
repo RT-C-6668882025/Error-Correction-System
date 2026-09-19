@@ -475,6 +475,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 append("已录入 ${result.inserted} 条，分析 ${r.done} 条")
                 if (stripped > 0) append("；剥离选择题 $stripped 道")
                 if (r.unmatched > 0) append("；$unmatchedHint${r.unmatched} 条")
+                if (r.skippedDuplicates > 0) append("；跳过重复 ${r.skippedDuplicates} 条")
                 if (r.failed > 0) append("；失败 ${r.failed} 条：${r.firstError}")
             }
             _messageBad.value = r.failed > 0 || r.done == 0
@@ -499,6 +500,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val done: Int = 0,
         val unmatched: Int = 0,
         val failed: Int = 0,
+        val skippedDuplicates: Int = 0,
         val firstError: String? = null,
     )
 
@@ -513,7 +515,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         onProgress: ((Int, Int) -> Unit)? = null,
         optionsOf: (ErrorRecord) -> List<String> = { emptyList() },
     ): BatchResult {
-        val runnable = targets.filter { !it.stem.isNullOrBlank() }
+        // 刚录入后 StateFlow 可能还没刷新，所以从数据库快照计算真正的保留项。
+        val canonicalUids = Duplicates.canonical(repo.snapshot()).mapTo(hashSetOf()) { it.uid }
+        val withStem = targets.filter { !it.stem.isNullOrBlank() }
+        val runnable = withStem.filter { it.uid in canonicalUids }
         val results = Batch.map(
             items = runnable,
             concurrency = Analyzer.CONCURRENCY,
@@ -540,7 +545,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 },
             )
         }
-        return BatchResult(done, unmatched, failed, firstError)
+        return BatchResult(
+            done = done,
+            unmatched = unmatched,
+            failed = failed,
+            skippedDuplicates = withStem.size - runnable.size,
+            firstError = firstError,
+        )
     }
 
     /** 单条重跑：题干改对了之后用。 */
@@ -583,6 +594,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             append("分析 ${r.done} 条")
             if (targets.size > runnable.size) append("；跳过没题干的 ${targets.size - runnable.size} 条")
             if (r.unmatched > 0) append("；$unmatchedHint${r.unmatched} 条")
+            if (r.skippedDuplicates > 0) append("；跳过重复 ${r.skippedDuplicates} 条")
             if (r.failed > 0) append("；失败 ${r.failed} 条：${r.firstError}")
         }
         // 一条都没归进板块，等于复习页还是空的——这是坏消息

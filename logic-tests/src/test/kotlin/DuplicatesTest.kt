@@ -90,4 +90,19 @@ class DuplicatesTest {
         assertEquals(2, left.size)
         assertTrue(Duplicates.groups(left).isEmpty())
     }
+
+    @Test fun `canonical keeps one record per duplicate group without deleting unique records`() {
+        val analysed = rec("q_001_1", createdAt = 2_000)
+        val duplicate = rec(
+            "q_002_1", no = 2, createdAt = 1_000,
+            branch = null, formShape = null, basis = null, status = RecordStatus.PENDING,
+        )
+        val unique = rec(
+            "q_009_1", no = 9, stem = "She is ___ than her sister.", answer = "taller",
+        )
+        assertEquals(
+            listOf(analysed.uid, unique.uid),
+            Duplicates.canonical(listOf(duplicate, analysed, unique)).map { it.uid },
+        )
+    }
 }

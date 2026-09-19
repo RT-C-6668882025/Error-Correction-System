@@ -29,7 +29,8 @@ private fun record(
 ) = ErrorRecord(
     id = "q_%03d_1".format(n),
     src = Src("2026卷", n, 1, "b01"),
-    stem = "The ___ of AI has changed everything.",
+    // 每个 n 代表不同原题；否则判重门会把测试夹具当成同一道题反复导入。
+    stem = "Question $n: The ___ of AI has changed everything.",
     given = "develop",
     answer = "development",
     confidence = Confidence.WRONG,

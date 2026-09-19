@@ -73,6 +73,17 @@ object Duplicates {
     fun redundant(records: List<ErrorRecord>): List<ErrorRecord> =
         groups(records).flatMap { it.drop }
 
+    /**
+     * 参与计算的唯一记录，保持原列表顺序。
+     *
+     * 重复项仍然留在原题页，删除权仍在人；但在删除之前，它们不能被重复分析、
+     * 也不能在汇总时冒充多份证据。每组只让 [Group.keep] 通过这道门。
+     */
+    fun canonical(records: List<ErrorRecord>): List<ErrorRecord> {
+        val dropped = redundant(records).mapTo(hashSetOf()) { it.uid }
+        return records.filterNot { it.uid in dropped }
+    }
+
     private fun cluster(same: List<ErrorRecord>): List<Group> {
         val byAnswer = same.groupBy { normalize(it.answer) }
         val answered = byAnswer.filterKeys { it != null }

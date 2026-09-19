@@ -1,6 +1,7 @@
 package com.ecs.core.agg
 
 import com.ecs.core.model.ErrorRecord
+import com.ecs.core.dup.Duplicates
 import com.ecs.core.tree.Skeleton
 
 /**
@@ -32,7 +33,7 @@ object Aggregator {
 
     /** 分析完并且归了类的才进得了板块；其余留在原题页。 */
     fun analyzed(records: List<ErrorRecord>): List<ErrorRecord> =
-        records.filter { it.analyzed() && Skeleton.isBranch(it.branch) }
+        Duplicates.canonical(records).filter { it.analyzed() && Skeleton.isBranch(it.branch) }
 
     /**
      * 「还没跑过分析」和「跑过了但没归进板块」是两回事，页面上要分开说。
